@@ -1,0 +1,63 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "engram"
+version = "0.4.0"
+description = "Engram — vector memory traces for AI agents (Claude Code, OpenCode, Codex)"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "engram contributors" }]
+keywords = ["memory", "vector-database", "claude", "llm", "agent", "rag", "skill"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.23",
+]
+
+[project.optional-dependencies]
+local = ["sentence-transformers>=2.2"]
+openai = ["openai>=1.0"]
+eval = ["tiktoken>=0.5"]
+# Pulls the official MCP Python SDK so engram-mcp uses spec-perfect framing.
+# Without it, engram-mcp falls back to a built-in stdio JSON-RPC loop that
+# implements just enough of MCP to be useful — fine for Claude Code /
+# OpenCode / Codex.
+mcp = ["mcp>=1.0", "anyio>=4.0"]
+all = [
+    "sentence-transformers>=2.2",
+    "openai>=1.0",
+    "tiktoken>=0.5",
+    "mcp>=1.0",
+    "anyio>=4.0",
+]
+
+[project.scripts]
+engram = "engram.cli:main"
+engram-mcp = "engram.mcp_server:main"
+
+# ── setuptools layout ────────────────────────────────────────────────────────
+# src/ layout: engram and pistadb live under src/ and are auto-discovered.
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# Ship the native PistaDB libraries (`pistadb._find_lib()` looks in pkg_dir
+# first, so the runtime cost is zero).  Cross-platform binaries shipped:
+#   - pistadb.dll       (Windows x64)
+#   - libpistadb.so     (Linux x64)
+#   - libpistadb.dylib  (macOS arm64)
+pistadb = ["*.dll", "*.so", "*.dylib", "*.so.*"]
+
+# Ship the skill files (SKILL.md + the scripts that Claude calls).  These
+# are copied into ~/.claude/skills/engram/ by `engram install-skill`.
+engram = ["_skill_files/SKILL.md", "_skill_files/scripts/*.py"]

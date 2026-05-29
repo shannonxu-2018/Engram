@@ -1,0 +1,248 @@
+"""Console entry point for the ``engram`` CLI.
+
+Wired up via ``pyproject.toml``:
+
+    [project.scripts]
+    engram     = "engram.cli:main"
+    engram-mcp = "engram.mcp_server:main"
+
+Subcommands:
+    engram install         --agent {claude-code,opencode,codex,all}
+                            [--target DIR] [--dev] [--force] [--remove]
+                            [--check] [--print-instructions-snippet]
+                            [--no-skill] [--no-mcp]
+    engram install-skill   (alias of `install --no-mcp`, kept for back-compat)
+    engram agents          list known agents and their integration mode
+    engram version
+    engram --version
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from typing import Optional, Sequence
+
+
+def _version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("engram")
+    except Exception:
+        return "0.0.0+unknown"
+
+
+def _add_install_args(s: argparse.ArgumentParser, *, legacy_skill_only: bool) -> None:
+    """Shared flags between ``install`` and ``install-skill``."""
+    if not legacy_skill_only:
+        # ``choices`` lets argparse reject typos at parse time with a clean
+        # message, instead of letting the bad name reach ``get_profile()``
+        # and surface as an unfiltered ValueError traceback.
+        from .agents import list_agents as _list_agents
+        s.add_argument(
+            "--agent",
+            default="claude-code",
+            choices=_list_agents() + ["all"],
+            help="Target agent (default: claude-code).",
+        )
+    s.add_argument(
+        "--target",
+        help="Override skill target dir (default = profile.skill_dir).",
+    )
+    s.add_argument(
+        "--dev",
+        action="store_true",
+        help="Symlink skill files instead of copying (edits in repo "
+             "propagate live; needs Windows Developer Mode or admin).",
+    )
+    s.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing install.",
+    )
+    s.add_argument(
+        "--remove",
+        action="store_true",
+        help="Remove the install for the chosen agent and exit.",
+    )
+    s.add_argument(
+        "--check",
+        action="store_true",
+        help="Report current status without writing.",
+    )
+    if not legacy_skill_only:
+        s.add_argument(
+            "--no-skill",
+            action="store_true",
+            help="Skip the file-based skill install (MCP-only).",
+        )
+        s.add_argument(
+            "--no-mcp",
+            action="store_true",
+            help="Skip MCP registration (file-skill-only — v0.3 behaviour).",
+        )
+        s.add_argument(
+            "--print-instructions-snippet",
+            dest="print_snippet",
+            action="store_true",
+            help="Print the markdown block to append to the agent's "
+                 "instructions file (CLAUDE.md / AGENTS.md) and exit.",
+        )
+        s.add_argument(
+            "--snippet-kind",
+            choices=["skill", "mcp"],
+            default=None,
+            help="Snippet framing: 'skill' (script-call protocol) or "
+                 "'mcp' (MCP tool protocol).  Default = the agent's "
+                 "primary integration.",
+        )
+    s.add_argument(
+        "--print-global-snippet",
+        dest="print_global_snippet",
+        action="store_true",
+        help="Deprecated alias of --print-instructions-snippet.",
+    )
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="engram",
+        description="Engram — vector memory traces for AI agents.",
+    )
+    p.add_argument(
+        "--version",
+        action="version",
+        version=f"engram {_version()}",
+    )
+    sub = p.add_subparsers(dest="cmd", required=True, metavar="<command>")
+
+    # ── install ─────────────────────────────────────────────────────────
+    inst = sub.add_parser(
+        "install",
+        help="Install / manage Engram for one or all supported agents.",
+    )
+    _add_install_args(inst, legacy_skill_only=False)
+    inst.set_defaults(func=_cmd_install)
+
+    # ── install-skill (alias / back-compat) ─────────────────────────────
+    sk = sub.add_parser(
+        "install-skill",
+        help="Alias of `install --agent claude-code --no-mcp` (kept for v0.3 users).",
+    )
+    _add_install_args(sk, legacy_skill_only=True)
+    sk.set_defaults(func=_cmd_install_skill)
+
+    # ── agents ──────────────────────────────────────────────────────────
+    ag = sub.add_parser("agents", help="List the supported agents.")
+    ag.set_defaults(func=_cmd_agents)
+
+    # ── version ─────────────────────────────────────────────────────────
+    v = sub.add_parser("version", help="Print the engram version and exit.")
+    v.set_defaults(func=_cmd_version)
+
+    return p
+
+
+def _cmd_install(args: argparse.Namespace) -> int:
+    from . import install as _inst
+
+    agent = args.agent
+    if getattr(args, "print_snippet", False) or getattr(args, "print_global_snippet", False):
+        if agent == "all":
+            print("--print-instructions-snippet needs a single --agent (not 'all').",
+                  file=sys.stderr)
+            return 2
+        return _inst.print_instructions_snippet(
+            agent=agent,
+            kind=getattr(args, "snippet_kind", None),
+        )
+    if args.check:
+        if agent == "all":
+            rc = 0
+            for a in _inst_list_agents():
+                print(f"── {a} ──")
+                rc |= _inst.check(agent=a, target=args.target)
+                print()
+            return rc
+        return _inst.check(agent=agent, target=args.target)
+    if args.remove:
+        if agent == "all":
+            rc = 0
+            for a in _inst_list_agents():
+                rc |= _inst.remove(agent=a, target=args.target)
+            return rc
+        return _inst.remove(agent=agent, target=args.target)
+
+    if args.no_skill and args.no_mcp:
+        # Don't silently no-op — a user passing both flags almost certainly
+        # mis-typed and would otherwise see "OK" with nothing actually done.
+        print(
+            "--no-skill and --no-mcp together would skip both halves of "
+            "the install — refusing to no-op.",
+            file=sys.stderr,
+        )
+        return 2
+    with_skill = None if not args.no_skill else False
+    with_mcp   = None if not args.no_mcp   else False
+    if agent == "all":
+        return _inst.install_all(dev=args.dev, force=args.force)
+    return _inst.install(
+        agent=agent,
+        target=args.target,
+        dev=args.dev,
+        force=args.force,
+        with_skill=with_skill,
+        with_mcp=with_mcp,
+    )
+
+
+def _cmd_install_skill(args: argparse.Namespace) -> int:
+    """v0.3 path — Claude Code file-skill only, no MCP."""
+    from . import install as _inst
+
+    if getattr(args, "print_global_snippet", False):
+        return _inst.print_instructions_snippet(agent="claude-code")
+    if args.check:
+        return _inst.check(agent="claude-code", target=args.target)
+    if args.remove:
+        return _inst.remove(agent="claude-code", target=args.target)
+    return _inst.install(
+        agent="claude-code",
+        target=args.target,
+        dev=args.dev,
+        force=args.force,
+        with_skill=True,
+        with_mcp=False,
+    )
+
+
+def _cmd_agents(_args: argparse.Namespace) -> int:
+    # iter_profiles() re-reads env vars on each call so per-agent home_dir
+    # values reflect the live environment (and so $CLAUDE_HOME etc. set in
+    # this shell session take effect).  Don't iterate BUILTIN_PROFILES here —
+    # that snapshot is frozen at import time.
+    from .agents import iter_profiles
+    for p in iter_profiles():
+        kinds = "+".join(p.install_kinds)
+        print(f"  {p.name:<14} {p.display:<14} home={p.home_dir}  kinds={kinds}")
+    return 0
+
+
+def _cmd_version(_args: argparse.Namespace) -> int:
+    print(_version())
+    return 0
+
+
+def _inst_list_agents() -> list[str]:
+    from .agents import list_agents
+    return list_agents()
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    rc = args.func(args)
+    return int(rc) if rc is not None else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

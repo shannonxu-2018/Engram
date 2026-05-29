@@ -1,0 +1,50 @@
+# ── Runtime data (per-machine, per-user — never commit) ──────────────────────
+# Engram's local tier writes here when this repo is itself a workspace.
+.claude/engram/
+
+# The skill is auto-deployed via `engram install-skill` into the user's
+# ~/.claude/; nothing about Claude Code's local settings belongs in git.
+.claude/settings.local.json
+
+# ── Bundled e5 model cache (471MB; downloaded on demand from HF) ─────────────
+models/
+
+# ── Python ───────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.installed.cfg
+
+# build / dist
+build/
+dist/
+wheels/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Type checkers / linters
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Coverage / profiling
+.coverage
+.coverage.*
+htmlcov/
+
+# ── IDE / editor (keep team-shared bits explicitly) ──────────────────────────
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.shared.json
+.idea/
+
+# ── OS junk ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

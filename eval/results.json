@@ -1,0 +1,88 @@
+{
+  "n_memories": 40,
+  "n_queries": 25,
+  "tokenizer": "tiktoken",
+  "embedder": "local-e5",
+  "systems": [
+    {
+      "name": "md-top3",
+      "description": "Legacy MEMORY.md + per-file .md; reads top-3 files per query (keyword Jaccard on the index line).",
+      "baseline_tokens": 1331,
+      "recall_at_1": 0.84,
+      "recall_at_3": 0.92,
+      "recall_at_5": 0.92,
+      "mrr": 0.88,
+      "avg_query_tokens": 199.64,
+      "total_query_tokens": 4991,
+      "recall_at_3_by_difficulty": {
+        "easy": 0.9,
+        "medium": 1.0,
+        "hard": 0.8
+      }
+    },
+    {
+      "name": "md-top1",
+      "description": "Legacy MEMORY.md + per-file .md; reads top-1 files per query (keyword Jaccard on the index line).",
+      "baseline_tokens": 1331,
+      "recall_at_1": 0.84,
+      "recall_at_3": 0.84,
+      "recall_at_5": 0.84,
+      "mrr": 0.84,
+      "avg_query_tokens": 65.48,
+      "total_query_tokens": 1637,
+      "recall_at_3_by_difficulty": {
+        "easy": 0.9,
+        "medium": 0.8,
+        "hard": 0.8
+      }
+    },
+    {
+      "name": "engram-k1",
+      "description": "Engram v2 (vector DB + rerank); top-1 recall, descriptions only. Embedder = local-e5.",
+      "baseline_tokens": 0,
+      "recall_at_1": 0.96,
+      "recall_at_3": 0.96,
+      "recall_at_5": 0.96,
+      "mrr": 0.96,
+      "avg_query_tokens": 36.6,
+      "total_query_tokens": 915,
+      "recall_at_3_by_difficulty": {
+        "easy": 1.0,
+        "medium": 0.9,
+        "hard": 1.0
+      }
+    },
+    {
+      "name": "engram-k3",
+      "description": "Engram v2 (vector DB + rerank); top-3 recall, descriptions only. Embedder = local-e5.",
+      "baseline_tokens": 0,
+      "recall_at_1": 0.96,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 0.9733333333333333,
+      "avg_query_tokens": 109.44,
+      "total_query_tokens": 2736,
+      "recall_at_3_by_difficulty": {
+        "easy": 1.0,
+        "medium": 1.0,
+        "hard": 1.0
+      }
+    },
+    {
+      "name": "engram-k5",
+      "description": "Engram v2 (vector DB + rerank); top-5 recall, descriptions only. Embedder = local-e5.",
+      "baseline_tokens": 0,
+      "recall_at_1": 0.96,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 0.9733333333333333,
+      "avg_query_tokens": 188.2,
+      "total_query_tokens": 4705,
+      "recall_at_3_by_difficulty": {
+        "easy": 1.0,
+        "medium": 1.0,
+        "hard": 1.0
+      }
+    }
+  ]
+}
