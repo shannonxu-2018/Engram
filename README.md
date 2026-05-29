@@ -83,8 +83,17 @@ For users of any supported agent:
 
 ```bash
 pip install git+https://github.com/shannonxu-2018/Engram.git
-engram install --agent claude-code
+engram install --agent claude-code   # install skill + register MCP
+engram init                          # wire CURRENT project (CLAUDE.md / .gitignore)
+engram warmup                        # pre-download the embedder (avoids 30 s cold-start)
+engram doctor                        # confirm everything is wired correctly
 ```
+
+The four-command sequence covers the three failure modes new users hit
+the most: *skill not installed* (`install`), *agent doesn't know it
+should use the skill* (`init`), and *first recall stalls while a 471 MB
+model downloads in silence* (`warmup`).  `doctor` ties them together
+with a single green/yellow/red report and copy-pasteable fix commands.
 
 For developers — clone and bootstrap:
 
@@ -95,6 +104,29 @@ git clone https://github.com/shannonxu-2018/Engram.git && cd Engram
 ```
 
 > Full install paths, the supported-OS matrix, env vars, troubleshooting, and uninstall live in [`INSTALL.md`](INSTALL.md).
+
+## The `engram` CLI
+
+Six top-level subcommands.  Run `engram <cmd> --help` for the full
+flag list; the table below covers the everyday invocation.
+
+| Command | What it does | Most common form |
+|---------|--------------|------------------|
+| **`install`** | Sets up Engram for one agent (or `--agent all`).  Copies/symlinks the file-based skill into the agent's skill dir **and** registers the `engram-mcp` server in the agent's MCP config. Idempotent. | `engram install --agent claude-code` |
+| **`init`** | Wires the **current project** to actually *use* Engram: appends the instructions snippet to `CLAUDE.md` / `AGENTS.md`, adds `.claude/engram/` to `.gitignore`, creates the local-tier directory.  Idempotent — re-runs are no-ops unless `--force`. | `engram init` |
+| **`warmup`** | Pre-loads the embedder so the first `recall` doesn't pay 30 s of cold-start.  For the local backend, also pre-downloads the ~471 MB `multilingual-e5-small` model from HuggingFace. | `engram warmup` |
+| **`doctor`** | One-shot health check across package install, PistaDB native lib, embedder spec, e5 model cache, every agent's skill+MCP state, the `.pst` tier files, and `engram-mcp` on PATH.  Prints copy-pasteable fix commands for anything not OK.  Exit codes: `0` OK / `1` warnings / `2` errors. | `engram doctor` |
+| **`agents`** | List the four built-in agents and their integration mode. | `engram agents` |
+| **`version`** | Print the installed package version. | `engram version` |
+
+> **First-time recipe**: `install` → `init` → `warmup` → `doctor`.
+> Each step is idempotent and the four together collapse the most
+> common new-user surprises (skill not installed / agent doesn't know
+> to use it / "why is the first recall hanging?" / silently mis-wired
+> across multiple agents) into explicit, verifiable actions.
+>
+> The legacy `engram install-skill` and v0.3-style env vars still
+> work — back-compat is preserved across all of these.
 
 ## How it works
 

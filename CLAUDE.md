@@ -107,9 +107,27 @@ Engram now ships with three integration profiles defined in
 * **Installer split**: agent-aware logic in `src/engram/install.py`;
   `src/engram/install_skill.py` is a back-compat shim that delegates
   to it.
-* **CLI**: `engram install --agent {claude-code,opencode,codex,all}`;
-  the old `engram install-skill` is preserved as a Claude-Code-skill-only
-  alias.
+* **CLI** has six top-level subcommands:
+  * `engram install --agent {claude-code,opencode,codex,openclaw,all}` —
+    user-level skill + MCP install (the v0.3 `install-skill` is a
+    Claude-Code-skill-only alias and still works).
+  * `engram init [--agent NAME] [--in PATH]` — *project-level* wiring:
+    appends the instructions snippet to `CLAUDE.md` / `AGENTS.md`, adds
+    `.claude/engram/` to `.gitignore`, creates the local-tier directory.
+    Idempotent.  Implementation: `src/engram/init_project.py`.
+  * `engram warmup [--spec SPEC]` — preloads the embedder + runs three
+    dummy embeds so the first real recall doesn't pay 30 s of cold
+    start.  For the local backend, also pre-downloads the e5 model.
+    Implementation: `engram.embedder.warmup()`.
+  * `engram doctor [--verbose] [--json]` — seven health checks
+    (package / pistadb native lib / embedder spec / e5 model cache /
+    `engram-mcp` on PATH / each agent's skill+MCP status / `.pst` tier
+    integrity).  Returns 0 / 1 / 2 based on the worst result.  Each
+    failing check carries a copy-pasteable fix.  Implementation:
+    `src/engram/doctor.py`.
+  * `engram agents` — list known agents + their current home_dir
+    (env-var-aware via `iter_profiles()`).
+  * `engram version`.
 * **Home-dir resolution in `store.py`**: now checks `ENGRAM_HOME` →
   `CLAUDE_HOME` → `~/.claude`. Keep `~/.claude/engram/` semantics
   unchanged — the global store still lives there by default, even when

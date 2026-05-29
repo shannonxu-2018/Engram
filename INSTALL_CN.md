@@ -15,9 +15,15 @@ Engram 在 **Claude Code**、**OpenCode**、**Codex** 上的安装、配置、�
 ```bash
 pip install git+https://github.com/shannonxu-2018/Engram.git
 engram install --agent claude-code   # 或：opencode | codex | openclaw | all
+engram init                          # 在当前项目里写 CLAUDE.md / .gitignore / .claude/engram/
+engram warmup                        # 提前加载 embedder，避免首次 recall 卡 30 秒
+engram doctor                        # 一条命令体检：包 / agents / tiers / embedder 全检
 ```
 
-大多数用户到这就够了。`--agent` 决定集成方式，下面都是参考资料。
+`init` / `warmup` / `doctor` 不是必跑，但**强烈建议**——它们把新人最常
+踩的三个坑（snippet 没加 / 首次 recall 静默下 471 MB / "为啥啥都没发生
+"）变成了**幂等的、明面上的步骤**。`--agent` 决定集成方式，下面都是
+参考资料。
 
 v0.3 的 `engram install-skill` 仍然可用，等价于 `engram install --agent claude-code --no-mcp`（只装文件式 skill）。
 
@@ -177,6 +183,39 @@ engram install-skill --check  # 等价于 `install --agent claude-code --check`
 ```bash
 engram agents
 ```
+
+---
+
+## 3b. 工程级配置 & 健康检查（`init` / `warmup` / `doctor`）
+
+装完 skill/MCP 之后，三条命令解决新人最常漏的几步：
+
+```bash
+engram init                                     # 当前工程
+engram init --agent opencode                    # 给某个 agent 写
+engram init --agent all --in <other-project>    # 把四家 agent 都写进另一个 repo
+```
+
+`init` **幂等**——重跑不会重复追加 snippet（先扫 marker）。手工删过
+那段想恢复的话用 `--force`。
+
+```bash
+engram warmup                                                # 用 ENGRAM_EMBEDDER 当前的 spec
+engram warmup --spec 'openai:text-embedding-3-large'         # 临时探测某个后端
+```
+
+`warmup` 把 embedder 加载好、跑三条 dummy embed，再报耗时。本地后端
+首次跑时会从 HuggingFace 下载 ~471 MB 的 `multilingual-e5-small` 模型。
+
+```bash
+engram doctor                # 人类可读报告
+engram doctor --verbose      # 每项加详情
+engram doctor --json         # 机器可读
+```
+
+`doctor` 退出码：`0` = 全好；`1` = 有 warning（比如某些 agent 没装——
+通常没关系）；`2` = 真坏了。报告末尾会打"快速修复"，每条都可以直接
+粘贴运行。
 
 ---
 

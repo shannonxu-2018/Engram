@@ -135,6 +135,62 @@ def _build_parser() -> argparse.ArgumentParser:
     ag = sub.add_parser("agents", help="List the supported agents.")
     ag.set_defaults(func=_cmd_agents)
 
+    # ── init ────────────────────────────────────────────────────────────
+    from .agents import list_agents as _la_for_init
+    ini = sub.add_parser(
+        "init",
+        help="Wire the current project (CLAUDE.md / .gitignore / .claude/engram/).",
+    )
+    ini.add_argument(
+        "--agent",
+        default="claude-code",
+        choices=_la_for_init() + ["all"],
+        help="Target agent (default: claude-code).",
+    )
+    ini.add_argument(
+        "--in", dest="project_root", default=None,
+        help="Project root to wire (default: current working directory).",
+    )
+    ini.add_argument(
+        "--no-snippet", action="store_true",
+        help="Skip appending the instructions block to CLAUDE.md/AGENTS.md.",
+    )
+    ini.add_argument(
+        "--no-gitignore", action="store_true",
+        help="Skip touching .gitignore.",
+    )
+    ini.add_argument(
+        "--force", action="store_true",
+        help="Re-append the instructions block even if a marker is found.",
+    )
+    ini.set_defaults(func=_cmd_init)
+
+    # ── doctor ──────────────────────────────────────────────────────────
+    doc = sub.add_parser(
+        "doctor",
+        help="Run a health check across package / agents / tiers / embedder.",
+    )
+    doc.add_argument(
+        "--verbose", action="store_true",
+        help="Print per-check details under each line.",
+    )
+    doc.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Emit machine-readable JSON instead of the human report.",
+    )
+    doc.set_defaults(func=_cmd_doctor)
+
+    # ── warmup ──────────────────────────────────────────────────────────
+    wu = sub.add_parser(
+        "warmup",
+        help="Pre-load the embedder so the first recall doesn't pay cold-start.",
+    )
+    wu.add_argument(
+        "--spec", default=None,
+        help="Override ENGRAM_EMBEDDER for this run (e.g. 'openai:text-embedding-3-small').",
+    )
+    wu.set_defaults(func=_cmd_warmup)
+
     # ── version ─────────────────────────────────────────────────────────
     v = sub.add_parser("version", help="Print the engram version and exit.")
     v.set_defaults(func=_cmd_version)
@@ -224,6 +280,39 @@ def _cmd_agents(_args: argparse.Namespace) -> int:
     for p in iter_profiles():
         kinds = "+".join(p.install_kinds)
         print(f"  {p.name:<14} {p.display:<14} home={p.home_dir}  kinds={kinds}")
+    return 0
+
+
+def _cmd_init(args: argparse.Namespace) -> int:
+    from . import init_project
+
+    return init_project.init(
+        agent=args.agent,
+        project_root=args.project_root,
+        with_snippet=not args.no_snippet,
+        with_gitignore=not args.no_gitignore,
+        force=args.force,
+    )
+
+
+def _cmd_doctor(args: argparse.Namespace) -> int:
+    from . import doctor
+
+    return doctor.run(verbose=args.verbose, as_json=args.as_json)
+
+
+def _cmd_warmup(args: argparse.Namespace) -> int:
+    from .embedder import warmup
+
+    try:
+        result = warmup(spec=args.spec)
+    except Exception as e:
+        print(f"warmup failed: {e}", file=sys.stderr)
+        return 1
+    print(
+        f"warmup OK — scheme={result['scheme']!r} "
+        f"dim={result['dim']} elapsed={result['elapsed_seconds']}s"
+    )
     return 0
 
 

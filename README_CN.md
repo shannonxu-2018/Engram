@@ -79,12 +79,17 @@ engram install --agent all           # 全部一次到位
 
 ## 安装
 
-任意支持的 agent，两条命令：
+任意支持的 agent，四条命令搞定从安装到第一次召回：
 
 ```bash
 pip install git+https://github.com/shannonxu-2018/Engram.git
-engram install --agent claude-code
+engram install --agent claude-code   # 装 skill + 注册 MCP
+engram init                          # 在当前项目里写 CLAUDE.md / .gitignore
+engram warmup                        # 提前下载 e5 模型（避免首次 recall 卡 30 秒）
+engram doctor                        # 一条命令体检，确认每一步都对了
 ```
+
+新用户最常踩的三个坑：**skill 没装**（`install`）、**agent 不知道要用 skill**（`init`）、**第一次 recall 静默等 471 MB 下载**（`warmup`）—— 这四条命令一次性盖掉。`doctor` 用红/黄/绿色报告 + 直接可粘贴的修复命令把它们串起来。
 
 开发者——clone + bootstrap：
 
@@ -95,6 +100,27 @@ git clone https://github.com/shannonxu-2018/Engram.git && cd Engram
 ```
 
 > 完整选项、支持的 OS 矩阵、env vars、故障排查和卸载见 [`INSTALL_CN.md`](INSTALL_CN.md)。
+
+## `engram` CLI
+
+六个顶层子命令。任意一条带 `--help` 看完整 flag 列表；下表只列日常用法。
+
+| 命令 | 用途 | 最常见用法 |
+|------|------|-----------|
+| **`install`** | 为某个 agent 装好 Engram（或 `--agent all`）。把文件式 skill 拷贝/symlink 到 agent 的 skill 目录，**同时**在 agent 的 MCP 配置里注册 `engram-mcp` server。幂等。 | `engram install --agent claude-code` |
+| **`init`** | 把**当前工程**真正接入 Engram：在 `CLAUDE.md` / `AGENTS.md` 末尾追加指令片段，把 `.claude/engram/` 加进 `.gitignore`，创建 local tier 目录。幂等——重跑是 no-op，除非 `--force`。| `engram init` |
+| **`warmup`** | 提前加载 embedder，避免第一次 `recall` 卡 30 秒冷启动。本地后端的话，也会提前从 HuggingFace 把 ~471 MB 的 `multilingual-e5-small` 模型下到本地。| `engram warmup` |
+| **`doctor`** | 一条命令做全面体检：包是否能 import、PistaDB 原生库、embedder spec、e5 模型缓存、每家 agent 的 skill+MCP 状态、`.pst` tier 文件、`engram-mcp` 在不在 PATH 上。每个非 OK 项给出可粘贴的修复命令。退出码：`0` OK / `1` warning / `2` error。 | `engram doctor` |
+| **`agents`** | 列出四家内置 agent + 集成方式。 | `engram agents` |
+| **`version`** | 打印已安装的包版本。 | `engram version` |
+
+> **首次推荐顺序**：`install` → `init` → `warmup` → `doctor`。每一步都
+> 幂等，四条加起来把新人最常踩的几个坑（skill 没装 / agent 不知道要用
+> skill / "怎么第一次 recall 卡住了？" / 多 agent 配错）变成**明面上的、
+> 可验证的步骤**。
+>
+> 老的 `engram install-skill` 命令和 v0.3 风格的 env var 仍然有效——
+> 所有改动都保留了向后兼容。
 
 ## 工作原理
 

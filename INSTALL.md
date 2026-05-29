@@ -15,9 +15,16 @@ Engram on **Claude Code**, **OpenCode**, and **Codex** — installation, configu
 ```bash
 pip install git+https://github.com/shannonxu-2018/Engram.git
 engram install --agent claude-code   # or:  opencode | codex | openclaw | all
+engram init                          # wire CURRENT project (CLAUDE.md / .gitignore / .claude/engram/)
+engram warmup                        # pre-load the embedder so the first recall is fast
+engram doctor                        # 1-shot health check across package / agents / tiers / embedder
 ```
 
-That's it for most users. The `--agent` flag picks the integration; everything below is reference.
+`init` / `warmup` / `doctor` are optional but **strongly recommended** —
+they collapse the most common new-user surprises (snippet not added,
+30 s model download mid-recall, "why is nothing happening?") into
+explicit, idempotent steps.  The `--agent` flag picks the integration;
+everything below is reference.
 
 The legacy v0.3 form `engram install-skill` still works — it's an alias for `engram install --agent claude-code --no-mcp` (file-skill only, no MCP registration).
 
@@ -183,6 +190,43 @@ List the supported agents and where their config lives:
 ```bash
 engram agents
 ```
+
+---
+
+## 3b. Per-project wiring & health (`init`, `warmup`, `doctor`)
+
+After installing the skill/MCP, three follow-up commands handle the
+parts most new users miss:
+
+```bash
+engram init                                     # current project
+engram init --agent opencode                    # per-agent variant
+engram init --agent all --in <other-project>    # all four agents into a different repo
+```
+
+`init` is idempotent — re-running it after a manual edit of `CLAUDE.md`
+will not duplicate the snippet (it scans for the marker first).  Pass
+`--force` to re-append after you deleted the block manually.
+
+```bash
+engram warmup                                                # uses ENGRAM_EMBEDDER
+engram warmup --spec 'openai:text-embedding-3-large'         # one-off probe
+```
+
+`warmup` loads the embedder, runs three dummy embeds, and reports
+elapsed time.  For the local backend, the first call also downloads
+the ~471 MB `multilingual-e5-small` model from HuggingFace.
+
+```bash
+engram doctor                # human-readable report
+engram doctor --verbose      # +per-check details
+engram doctor --json         # machine-readable
+```
+
+`doctor` returns exit code `0` when everything is OK, `1` if there are
+warnings (e.g. some agents not installed — usually fine), and `2` if
+something is actually broken.  Every non-OK line carries a
+copy-pasteable `fix command` printed at the bottom of the report.
 
 ---
 

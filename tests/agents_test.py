@@ -411,6 +411,148 @@ def test_codex_toml_preserves_other_sections() -> None:
                 "our section was added")
 
 
+# ── init_project (v0.4: engram init) ────────────────────────────────────────
+
+def test_init_writes_snippet_and_gitignore() -> None:
+    """``init`` writes CLAUDE.md snippet + .gitignore + .claude/engram/ dir."""
+    from engram import init_project
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        rc = init_project.init(agent="claude-code", project_root=root)
+        _assert(rc == 0, f"init exit code is 0 (got {rc})")
+        claude_md = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        _assert("use Engram, not MD files" in claude_md,
+                "CLAUDE.md contains the skill snippet marker")
+        gi = (root / ".gitignore").read_text(encoding="utf-8")
+        _assert(".claude/engram/" in gi,
+                ".gitignore has the local-tier rule")
+        _assert((root / ".claude" / "engram").is_dir(),
+                ".claude/engram/ directory created")
+
+
+def test_init_idempotent() -> None:
+    """Re-running ``init`` does not duplicate the snippet or .gitignore line."""
+    from engram import init_project
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        init_project.init(agent="claude-code", project_root=root)
+        first_md  = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        first_gi  = (root / ".gitignore").read_text(encoding="utf-8")
+        # Second run: should be a no-op for both files.
+        rc = init_project.init(agent="claude-code", project_root=root)
+        _assert(rc == 0, "second init also exits 0")
+        _assert((root / "CLAUDE.md").read_text(encoding="utf-8") == first_md,
+                "CLAUDE.md unchanged on second init")
+        _assert((root / ".gitignore").read_text(encoding="utf-8") == first_gi,
+                ".gitignore unchanged on second init")
+
+
+def test_init_preserves_existing_claude_md() -> None:
+    """If CLAUDE.md already exists with unrelated content, ``init`` appends
+    rather than overwrites."""
+    from engram import init_project
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        pre = "# Project rules\n\nUse tabs.\n"
+        (root / "CLAUDE.md").write_text(pre, encoding="utf-8")
+        init_project.init(agent="claude-code", project_root=root)
+        final = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        _assert(final.startswith(pre.rstrip()),
+                "pre-existing CLAUDE.md content preserved at the top")
+        _assert("use Engram, not MD files" in final,
+                "Engram snippet appended after existing content")
+
+
+def test_init_gitignore_tolerates_leading_slash() -> None:
+    """A ``/.claude/engram/`` entry already in .gitignore is the same rule;
+    don't double-add."""
+    from engram import init_project
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / ".gitignore").write_text("/.claude/engram/\n", encoding="utf-8")
+        init_project.init(
+            agent="claude-code", project_root=root, with_snippet=False,
+        )
+        gi = (root / ".gitignore").read_text(encoding="utf-8")
+        # Should still only contain one effective rule, not two.
+        rules = [
+            ln.split("#", 1)[0].strip().lstrip("/").rstrip("/")
+            for ln in gi.splitlines()
+            if ln.strip() and not ln.strip().startswith("#")
+        ]
+        engram_rules = [r for r in rules if r == ".claude/engram"]
+        _assert(len(engram_rules) == 1,
+                f"only one effective rule for .claude/engram ({rules})")
+
+
+def test_init_force_re_appends() -> None:
+    """``--force`` re-appends the snippet even though the marker exists.
+
+    Useful after the user has manually deleted the block and wants it
+    back, or when the snippet template was updated upstream.
+    """
+    from engram import init_project
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        init_project.init(agent="claude-code", project_root=root)
+        first_len = len((root / "CLAUDE.md").read_text(encoding="utf-8"))
+        init_project.init(
+            agent="claude-code", project_root=root, force=True,
+        )
+        second_len = len((root / "CLAUDE.md").read_text(encoding="utf-8"))
+        _assert(second_len > first_len,
+                f"--force grew CLAUDE.md (was {first_len}, now {second_len})")
+
+
+# ── doctor (v0.4: engram doctor) ────────────────────────────────────────────
+
+def test_doctor_runs_and_returns_results() -> None:
+    """The doctor driver iterates every registered check, collects results,
+    and returns one of {0, 1, 2}.  We can't assert specific OK/WARN/ERR
+    counts because they depend on the operator's environment, but we
+    *can* assert that the driver returns and produces a non-empty list
+    when invoked via the JSON path."""
+    import io
+    import contextlib
+    from engram import doctor
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = doctor.run(verbose=False, as_json=True)
+    _assert(rc in (0, 1, 2),
+            f"doctor returns one of 0/1/2 (got {rc})")
+    payload = json.loads(buf.getvalue())
+    _assert("results" in payload and len(payload["results"]) >= 5,
+            f"doctor JSON has a non-empty results list (got {len(payload.get('results', []))})")
+    # Sanity: every result has the three required fields.
+    for r in payload["results"]:
+        _assert(set(r) >= {"name", "status", "message"},
+                f"doctor result has required fields: {r}")
+        _assert(r["status"] in ("ok", "warn", "err"),
+                f"doctor result status is valid enum: {r['status']}")
+
+
+# ── embedder warmup (v0.4: engram warmup) ───────────────────────────────────
+
+def test_warmup_hash_backend() -> None:
+    """``warmup()`` with the hash backend runs in a fraction of a second
+    and returns the resolved spec/dim metadata."""
+    from engram.embedder import warmup
+
+    result = warmup(spec="hash?dim=64")
+    _assert(result["scheme"] == "hash",
+            f"warmup resolved scheme=hash (got {result['scheme']!r})")
+    _assert(result["dim"] == 64,
+            f"warmup honoured ?dim=64 (got {result['dim']})")
+    _assert(result["elapsed_seconds"] >= 0.0,
+            f"elapsed_seconds is non-negative (got {result['elapsed_seconds']})")
+
+
 # ── MemoryHit JSON-safety (regression for BUG-M11) ──────────────────────────
 
 def test_memory_hit_to_dict_is_json_safe() -> None:
@@ -519,6 +661,19 @@ def main() -> None:
 
     print("\n--- MemoryHit JSON-safety ---")
     test_memory_hit_to_dict_is_json_safe()
+
+    print("\n--- init_project: engram init ---")
+    test_init_writes_snippet_and_gitignore()
+    test_init_idempotent()
+    test_init_preserves_existing_claude_md()
+    test_init_gitignore_tolerates_leading_slash()
+    test_init_force_re_appends()
+
+    print("\n--- doctor: engram doctor ---")
+    test_doctor_runs_and_returns_results()
+
+    print("\n--- warmup: engram warmup ---")
+    test_warmup_hash_backend()
 
     print("\nALL AGENTS-LAYER TESTS PASSED.")
 

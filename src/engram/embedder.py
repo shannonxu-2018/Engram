@@ -303,11 +303,38 @@ class LocalE5Embedder:
     def _lazy_load(self) -> None:
         if self._model is not None:
             return
+        # First-load can be slow — sentence-transformers may download a
+        # ~471 MB model from HuggingFace.  Print a single status line to
+        # stderr so users don't think the process froze.  We do this
+        # *before* touching the model so the message appears immediately;
+        # the elapsed-time hint at the end lets users calibrate.
+        import time
+        _hf_cache_miss = self._looks_like_first_run()
+        t0 = time.time()
+        if _hf_cache_miss:
+            print(
+                f"engram: loading {self._model_path} (first run downloads "
+                f"~471 MB from HuggingFace, may take 30s on a slow link) ...",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            print(
+                f"engram: loading {self._model_path} from cache ...",
+                file=sys.stderr,
+                flush=True,
+            )
+
         # Preferred: sentence-transformers handles pool + L2 norm.
         try:
             from sentence_transformers import SentenceTransformer  # type: ignore
             self._model = SentenceTransformer(self._model_path, device=self._device)
             self._backend = "st"
+            print(
+                f"engram: loaded in {time.time() - t0:.1f}s",
+                file=sys.stderr,
+                flush=True,
+            )
             return
         except ImportError:
             pass
@@ -316,7 +343,6 @@ class LocalE5Embedder:
             # download failed.  Log so the operator can tell why the
             # fast path was skipped rather than silently paying the
             # slower fallback cost forever.
-            import sys
             print(
                 f"engram: sentence-transformers load failed ({e!r}); "
                 f"falling back to transformers + manual pool.",
@@ -339,6 +365,28 @@ class LocalE5Embedder:
         self._model.eval()
         self._torch = torch
         self._backend = "hf"
+        print(
+            f"engram: loaded in {time.time() - t0:.1f}s "
+            f"(transformers fallback)",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    @staticmethod
+    def _looks_like_first_run() -> bool:
+        """Quick heuristic: is the e5 model cache empty?
+
+        Used only to phrase the progress message — a false positive just
+        means we say "downloading" when really sentence-transformers will
+        just hit the cache (harmless), and vice versa.  Errs on the side
+        of warning the user about a likely slow first call.
+        """
+        hf_home = (
+            os.environ.get("HF_HOME")
+            or os.environ.get("HUGGINGFACE_HUB_CACHE")
+            or str(Path.home() / ".cache" / "huggingface")
+        )
+        return not (Path(hf_home) / "hub" / "models--intfloat--multilingual-e5-small").is_dir()
 
     def embed(self, text: str, *, kind: str = "passage") -> np.ndarray:
         return self.embed_batch([text], kind=kind)[0]
@@ -1024,6 +1072,38 @@ def build_default_embedder(cache_path: Optional[str] = None) -> CachedEmbedder:
     return CachedEmbedder(inner, cache_path=cache_path)
 
 
+def warmup(spec: Optional[str] = None) -> Dict[str, Any]:
+    """Pre-load the embedder so the first real call doesn't pay cold-start.
+
+    Picks the spec from the ``spec`` arg, then ``ENGRAM_EMBEDDER``, then the
+    default.  Runs three dummy embed calls so the model is in memory and
+    the on-disk cache is initialised.
+
+    Returns a small status dict (used by the CLI for human-friendly
+    output) — the heavy lifting is the side effect.
+
+    Typical use is right after ``engram install`` — see ``engram warmup``.
+    """
+    import time as _time
+    if spec is None:
+        spec = os.environ.get("ENGRAM_EMBEDDER", "")
+    parsed = parse_spec(spec)
+
+    t0 = _time.time()
+    inner = build_embedder(spec)
+    inner.embed_batch(
+        ["engram warmup probe", "this is a second sample", "and a third"],
+        kind="passage",
+    )
+    elapsed = _time.time() - t0
+    return {
+        "spec": spec,
+        "scheme": parsed.scheme,
+        "dim": inner.dim,
+        "elapsed_seconds": round(elapsed, 2),
+    }
+
+
 __all__ = [
     # Protocol
     "Embedder",
@@ -1034,6 +1114,7 @@ __all__ = [
     "registered_schemes",
     "build_embedder",
     "build_default_embedder",
+    "warmup",
     # Backends
     "LocalE5Embedder",
     "OpenAIEmbedder",
