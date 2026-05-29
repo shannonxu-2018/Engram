@@ -12,6 +12,7 @@ Subcommands:
                             [--check] [--print-instructions-snippet]
                             [--no-skill] [--no-mcp]
     engram install-skill   (alias of `install --no-mcp`, kept for back-compat)
+    engram setup           interactive wizard: install + enable + warmup + doctor
     engram agents          list known agents and their integration mode
     engram version
     engram --version
@@ -134,6 +135,32 @@ def _build_parser() -> argparse.ArgumentParser:
     # ── agents ──────────────────────────────────────────────────────────
     ag = sub.add_parser("agents", help="List the supported agents.")
     ag.set_defaults(func=_cmd_agents)
+
+    # ── setup ───────────────────────────────────────────────────────────
+    from .agents import list_agents as _la_for_setup
+    st = sub.add_parser(
+        "setup",
+        help="Interactive wizard: install + enable + warmup + doctor in one go.",
+    )
+    st.add_argument(
+        "--agent",
+        default=None,
+        choices=_la_for_setup() + ["all"],
+        help="Skip the agent question and target this agent (or 'all').",
+    )
+    st.add_argument(
+        "--yes", "-y", dest="assume_yes", action="store_true",
+        help="Non-interactive: accept all recommended defaults (for scripts).",
+    )
+    st.add_argument(
+        "--dev", action="store_true",
+        help="Symlink skill files instead of copying (needs Windows Developer Mode).",
+    )
+    st.add_argument(
+        "--force", action="store_true",
+        help="Overwrite an existing skill install / re-append snippets.",
+    )
+    st.set_defaults(func=_cmd_setup)
 
     # ── init ────────────────────────────────────────────────────────────
     from .agents import list_agents as _la_for_init
@@ -281,6 +308,17 @@ def _cmd_agents(_args: argparse.Namespace) -> int:
         kinds = "+".join(p.install_kinds)
         print(f"  {p.name:<14} {p.display:<14} home={p.home_dir}  kinds={kinds}")
     return 0
+
+
+def _cmd_setup(args: argparse.Namespace) -> int:
+    from . import setup_wizard
+
+    return setup_wizard.run(
+        agent=args.agent,
+        assume_yes=args.assume_yes,
+        dev=args.dev,
+        force=args.force,
+    )
 
 
 def _cmd_init(args: argparse.Namespace) -> int:

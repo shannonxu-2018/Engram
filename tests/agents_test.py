@@ -629,6 +629,52 @@ def test_snippet_includes_correct_instructions_file() -> None:
         _assert(False, "openclaw --snippet-kind=mcp should have raised ValueError")
 
 
+# ── setup wizard ──────────────────────────────────────────────────────────────
+
+def test_setup_select_agents_preselect() -> None:
+    """An explicit --agent short-circuits the interactive picker."""
+    from engram.setup_wizard import _select_agents
+    from engram.agents import list_agents
+
+    _assert(_select_agents("claude-code", assume_yes=False) == ["claude-code"],
+            "preselect of a single agent returns just that agent")
+    _assert(_select_agents("all", assume_yes=False) == list_agents(),
+            "preselect 'all' returns every agent")
+
+
+def test_setup_select_agents_default_noninteractive() -> None:
+    """With no preselect and no TTY, fall back to detected / claude-code."""
+    from engram.setup_wizard import _select_agents
+    from engram.agents import list_agents
+
+    # The test harness runs with stdin not a TTY, so this exercises the
+    # non-interactive default path without blocking on input().
+    chosen = _select_agents(None, assume_yes=True)
+    valid = set(list_agents())
+    _assert(len(chosen) >= 1 and set(chosen) <= valid,
+            f"default selection is a non-empty subset of known agents, got {chosen}")
+
+
+def test_setup_ask_yes_no_defaults() -> None:
+    """In non-interactive / assume_yes mode the prompt returns its default."""
+    from engram.setup_wizard import _ask_yes_no
+
+    _assert(_ask_yes_no("q?", default=True, assume_yes=True) is True,
+            "assume_yes honours a True default")
+    _assert(_ask_yes_no("q?", default=False, assume_yes=True) is False,
+            "assume_yes honours a False default")
+
+
+def test_setup_noninteractive_guard() -> None:
+    """`engram setup` without --yes on a non-TTY refuses (exit 2), no side effects."""
+    from engram import setup_wizard
+
+    # stdin is not a TTY under the test runner; without assume_yes the
+    # wizard must bail before touching install/warmup/doctor.
+    rc = setup_wizard.run(agent="claude-code", assume_yes=False)
+    _assert(rc == 2, f"non-interactive setup without --yes returns 2, got {rc}")
+
+
 # ── Driver ───────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -674,6 +720,12 @@ def main() -> None:
 
     print("\n--- warmup: engram warmup ---")
     test_warmup_hash_backend()
+
+    print("\n--- setup: engram setup wizard ---")
+    test_setup_select_agents_preselect()
+    test_setup_select_agents_default_noninteractive()
+    test_setup_ask_yes_no_defaults()
+    test_setup_noninteractive_guard()
 
     print("\nALL AGENTS-LAYER TESTS PASSED.")
 

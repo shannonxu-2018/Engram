@@ -19,7 +19,7 @@ Engram 是一个为 AI 编码 agent 设计的**向量数据库记忆后端**。*
 
 ```bash
 pip install git+https://github.com/shannonxu-2018/Engram.git
-engram install --agent claude-code   # 或：opencode | codex | all
+engram setup            # 一条交互式向导：安装 + 启用 + 预热 + 体检
 ```
 
 ---
@@ -79,7 +79,19 @@ engram install --agent all           # 全部一次到位
 
 ## 安装
 
-任意支持的 agent，四条命令搞定从安装到第一次召回：
+任意支持的 agent，最省事的方式是一条交互式命令：
+
+```bash
+pip install git+https://github.com/shannonxu-2018/Engram.git
+engram setup            # 交互式向导 —— 推荐
+```
+
+`setup` 自动探测你装过的 agent，然后带你走完 安装 → 全局启用 → 模型预热
+→ 收尾体检，每个 yes/no 提问都有合理默认值（直接回车即可）。加 `--yes`
+可非交互地全用默认值，或用 `--agent NAME` 跳过选 agent 那一步。
+
+<details>
+<summary><b>手动路径</b>—— 也就是 <code>setup</code> 替你跑的那几步</summary>
 
 ```bash
 pip install git+https://github.com/shannonxu-2018/Engram.git
@@ -90,6 +102,8 @@ engram doctor                        # 一条命令体检，确认每一步都�
 ```
 
 新用户最常踩的三个坑：**skill 没装**（`install`）、**agent 不知道要用 skill**（`init`）、**第一次 recall 静默等 471 MB 下载**（`warmup`）—— 这四条命令一次性盖掉。`doctor` 用红/黄/绿色报告 + 直接可粘贴的修复命令把它们串起来。
+
+</details>
 
 开发者——clone + bootstrap：
 
@@ -103,10 +117,11 @@ git clone https://github.com/shannonxu-2018/Engram.git && cd Engram
 
 ## `engram` CLI
 
-六个顶层子命令。任意一条带 `--help` 看完整 flag 列表；下表只列日常用法。
+七个顶层子命令。任意一条带 `--help` 看完整 flag 列表；下表只列日常用法。
 
 | 命令 | 用途 | 最常见用法 |
 |------|------|-----------|
+| **`setup`** | **交互式向导（推荐）。** 探测你的 agent，然后依次跑 安装 → 全局启用 → warmup → doctor，每个提问都有默认值。`--yes` 无人值守，`--agent NAME` 预选 agent。| `engram setup` |
 | **`install`** | 为某个 agent 装好 Engram（或 `--agent all`）。把文件式 skill 拷贝/symlink 到 agent 的 skill 目录，**同时**在 agent 的 MCP 配置里注册 `engram-mcp` server。幂等。 | `engram install --agent claude-code` |
 | **`init`** | 把**当前工程**真正接入 Engram：在 `CLAUDE.md` / `AGENTS.md` 末尾追加指令片段，把 `.claude/engram/` 加进 `.gitignore`，创建 local tier 目录。幂等——重跑是 no-op，除非 `--force`。| `engram init` |
 | **`warmup`** | 提前加载 embedder，避免第一次 `recall` 卡 30 秒冷启动。本地后端的话，也会提前从 HuggingFace 把 ~471 MB 的 `multilingual-e5-small` 模型下到本地。| `engram warmup` |
@@ -114,10 +129,11 @@ git clone https://github.com/shannonxu-2018/Engram.git && cd Engram
 | **`agents`** | 列出四家内置 agent + 集成方式。 | `engram agents` |
 | **`version`** | 打印已安装的包版本。 | `engram version` |
 
-> **首次推荐顺序**：`install` → `init` → `warmup` → `doctor`。每一步都
-> 幂等，四条加起来把新人最常踩的几个坑（skill 没装 / agent 不知道要用
-> skill / "怎么第一次 recall 卡住了？" / 多 agent 配错）变成**明面上的、
-> 可验证的步骤**。
+> **首次推荐**：直接跑 `engram setup`——它替你依次做 `install` → 启用 →
+> `warmup` → `doctor`，每个提问都有默认值。这些单独的子命令仍保留，供
+> 脚本化或精细化安装使用，且每一条都幂等。它们合起来把新人最常踩的几个
+> 坑（skill 没装 / agent 不知道要用 skill / "怎么第一次 recall 卡住了？"
+> / 多 agent 配错）变成**明面上的、可验证的步骤**。
 >
 > 老的 `engram install-skill` 命令和 v0.3 风格的 env var 仍然有效——
 > 所有改动都保留了向后兼容。
@@ -287,8 +303,8 @@ harness 在 agent 尝试之前就拦住——最硬核。
         ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │   engram （Python 包，在 site-packages）                            │
-│   embedder.py   ─►  4 个嵌入后端（默认 LocalE5、OpenAI、HTTP、         │
-│                                    Hash 仅测试）                      │
+│   embedder.py   ─►  7 个嵌入后端（默认本地 e5、OpenAI、Ollama、       │
+│                      Cohere、Voyage、HTTP、Hash —— Hash 仅测试）       │
 │   store.py      ─►  Schema + 两级路径路由                            │
 │   memory.py     ─►  MemoryManager.save / recall / expand / forget   │
 │   decay.py      ─►  importance_eff、boost_on_access、rerank          │
@@ -527,12 +543,14 @@ engram/                                  (仓库根)
 │   │   ├── embedder.py / store.py / memory.py
 │   │   ├── decay.py / consolidate.py    (v2 机制)
 │   │   ├── agents.py / install.py       (v0.4 多 agent)
+│   │   ├── init_project.py / doctor.py  (v0.4 init + 体检)
 │   │   ├── mcp_server.py                (v0.4 `engram-mcp`)
-│   │   ├── cli.py / install_skill.py    (`engram` CLI + v0.3 别名)
+│   │   ├── cli.py / setup_wizard.py     (`engram` CLI + setup 向导)
+│   │   ├── install_skill.py             (v0.3 install-skill 别名)
 │   │   └── _skill_files/                作为 package data 打包
 │   │       ├── SKILL.md
-│   │       └── scripts/{recall,save,expand,list,forget,related,
-│   │                    consolidate,migrate_md,_common}.py
+│   │       └── scripts/{recall,save,expand,list,forget,patch,
+│   │                    related,consolidate,migrate_md,_common}.py
 │   └── pistadb/                         内嵌向量数据库
 │       └── pistadb.dll / libpistadb.so / libpistadb.dylib
 ├── tests/

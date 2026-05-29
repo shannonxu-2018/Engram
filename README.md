@@ -19,7 +19,7 @@ Engram is a **vector-database memory backend** for AI coding agents. One ``.pst`
 
 ```bash
 pip install git+https://github.com/shannonxu-2018/Engram.git
-engram install --agent claude-code   # or: opencode | codex | openclaw | all
+engram setup            # one interactive wizard: install + enable + warm up + verify
 ```
 
 ---
@@ -79,7 +79,21 @@ engram install --agent all           # everything
 
 ## Installation
 
-For users of any supported agent:
+For users of any supported agent, the easy path is one interactive command:
+
+```bash
+pip install git+https://github.com/shannonxu-2018/Engram.git
+engram setup            # interactive wizard — recommended
+```
+
+`setup` detects your installed agents, then walks you through install →
+enable-for-every-project → model warm-up → a closing health check, with a
+sensible default for every yes/no prompt (just press Enter). Add `--yes`
+to accept all defaults non-interactively, or `--agent NAME` to skip the
+agent question.
+
+<details>
+<summary><b>Manual path</b> — the steps <code>setup</code> runs for you</summary>
 
 ```bash
 pip install git+https://github.com/shannonxu-2018/Engram.git
@@ -89,11 +103,13 @@ engram warmup                        # pre-download the embedder (avoids 30 s co
 engram doctor                        # confirm everything is wired correctly
 ```
 
-The four-command sequence covers the three failure modes new users hit
+This four-command sequence covers the three failure modes new users hit
 the most: *skill not installed* (`install`), *agent doesn't know it
 should use the skill* (`init`), and *first recall stalls while a 471 MB
 model downloads in silence* (`warmup`).  `doctor` ties them together
 with a single green/yellow/red report and copy-pasteable fix commands.
+
+</details>
 
 For developers — clone and bootstrap:
 
@@ -107,11 +123,12 @@ git clone https://github.com/shannonxu-2018/Engram.git && cd Engram
 
 ## The `engram` CLI
 
-Six top-level subcommands.  Run `engram <cmd> --help` for the full
+Seven top-level subcommands.  Run `engram <cmd> --help` for the full
 flag list; the table below covers the everyday invocation.
 
 | Command | What it does | Most common form |
 |---------|--------------|------------------|
+| **`setup`** | **Interactive wizard (recommended).** Detects your agents, then runs install → enable-globally → warmup → doctor, with a default for every prompt.  `--yes` for an unattended run, `--agent NAME` to preselect. | `engram setup` |
 | **`install`** | Sets up Engram for one agent (or `--agent all`).  Copies/symlinks the file-based skill into the agent's skill dir **and** registers the `engram-mcp` server in the agent's MCP config. Idempotent. | `engram install --agent claude-code` |
 | **`init`** | Wires the **current project** to actually *use* Engram: appends the instructions snippet to `CLAUDE.md` / `AGENTS.md`, adds `.claude/engram/` to `.gitignore`, creates the local-tier directory.  Idempotent — re-runs are no-ops unless `--force`. | `engram init` |
 | **`warmup`** | Pre-loads the embedder so the first `recall` doesn't pay 30 s of cold-start.  For the local backend, also pre-downloads the ~471 MB `multilingual-e5-small` model from HuggingFace. | `engram warmup` |
@@ -119,8 +136,10 @@ flag list; the table below covers the everyday invocation.
 | **`agents`** | List the four built-in agents and their integration mode. | `engram agents` |
 | **`version`** | Print the installed package version. | `engram version` |
 
-> **First-time recipe**: `install` → `init` → `warmup` → `doctor`.
-> Each step is idempotent and the four together collapse the most
+> **First-time recipe**: just run `engram setup` — it does `install` →
+> enable → `warmup` → `doctor` for you, with a default for every prompt.
+> The standalone subcommands stay available for scripted or fine-grained
+> setups, and each is idempotent.  Together they collapse the most
 > common new-user surprises (skill not installed / agent doesn't know
 > to use it / "why is the first recall hanging?" / silently mis-wired
 > across multiple agents) into explicit, verifiable actions.
@@ -293,8 +312,8 @@ If both `<project>/.claude/skills/engram/` and `~/.claude/skills/engram/` exist,
         ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │   engram (Python package, in site-packages)                       │
-│   embedder.py   ─►  4 backends (LocalE5 default, OpenAI, HTTP,    │
-│                                  Hash for testing)                │
+│   embedder.py   ─►  7 backends (local e5, OpenAI, Ollama, Cohere, │
+│                     Voyage, HTTP, Hash (Hash = testing only)      │
 │   store.py      ─►  Schema + two-tier paths                       │
 │   memory.py     ─►  MemoryManager.save / recall / expand / forget │
 │   decay.py      ─►  importance_eff, boost_on_access, rerank       │
@@ -534,12 +553,14 @@ engram/                                  (repo root)
 │   │   ├── embedder.py / store.py / memory.py
 │   │   ├── decay.py / consolidate.py    (v2 mechanics)
 │   │   ├── agents.py / install.py       (v0.4 multi-agent)
+│   │   ├── init_project.py / doctor.py  (v0.4 init + health check)
 │   │   ├── mcp_server.py                (v0.4 `engram-mcp`)
-│   │   ├── cli.py / install_skill.py    (`engram` CLI + v0.3 alias)
+│   │   ├── cli.py / setup_wizard.py     (`engram` CLI + setup wizard)
+│   │   ├── install_skill.py             (v0.3 install-skill alias)
 │   │   └── _skill_files/                shipped as package data
 │   │       ├── SKILL.md
-│   │       └── scripts/{recall,save,expand,list,forget,related,
-│   │                    consolidate,migrate_md,_common}.py
+│   │       └── scripts/{recall,save,expand,list,forget,patch,
+│   │                    related,consolidate,migrate_md,_common}.py
 │   └── pistadb/                         vendored vector DB
 │       └── pistadb.dll / libpistadb.so / libpistadb.dylib
 ├── tests/

@@ -2,7 +2,7 @@
 
 # 安装指南
 
-Engram 在 **Claude Code**、**OpenCode**、**Codex** 上的安装、配置、故障排查。
+Engram 在 **Claude Code**、**OpenCode**、**Codex**、**OpenClaw** 上的安装、配置、故障排查。
 
 [English](INSTALL.md) · [中文](INSTALL_CN.md) · [项目说明](README_CN.md)
 
@@ -11,6 +11,20 @@ Engram 在 **Claude Code**、**OpenCode**、**Codex** 上的安装、配置、�
 ---
 
 ## TL;DR
+
+最省事的方式 —— 一条交互式命令搞定全部：
+
+```bash
+pip install git+https://github.com/shannonxu-2018/Engram.git
+engram setup            # 交互式：选 agent → 安装 → 启用 → warmup → doctor
+```
+
+`setup` 自动探测你装过的 agent，带你走完每一步，每个提问都有合理默认值
+（直接回车即可）。加 `--yes` 可非交互地全用默认值，或用 `--agent NAME`
+跳过选 agent 那一步。
+
+<details>
+<summary>想自己一条条手动跑？</summary>
 
 ```bash
 pip install git+https://github.com/shannonxu-2018/Engram.git
@@ -24,6 +38,8 @@ engram doctor                        # 一条命令体检：包 / agents / tiers
 踩的三个坑（snippet 没加 / 首次 recall 静默下 471 MB / "为啥啥都没发生
 "）变成了**幂等的、明面上的步骤**。`--agent` 决定集成方式，下面都是
 参考资料。
+
+</details>
 
 v0.3 的 `engram install-skill` 仍然可用，等价于 `engram install --agent claude-code --no-mcp`（只装文件式 skill）。
 
@@ -101,6 +117,10 @@ pip install "engram[all]"     # 以上全部
 ---
 
 ## 3. 为某个 agent 安装
+
+> **推荐：** `engram setup` 把本节加上 §3b 的全部步骤包进一条交互式
+> 向导（每个提问都有默认值）。下面这些 per-agent 命令是给你需要手动
+> 控制、或脚本化无人值守安装时用的。
 
 ```bash
 # Claude Code：文件式 skill + MCP server 注册
@@ -396,7 +416,7 @@ python -m eval.runner
 ```
 
 ```bash
-./bootstrap.sh                          # Linux/macOS 等价物（待补）
+./bootstrap.sh                          # Linux/macOS：pip install -e . + skill --dev
 ```
 
 ---

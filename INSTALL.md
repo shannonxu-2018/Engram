@@ -2,7 +2,7 @@
 
 # Installation guide
 
-Engram on **Claude Code**, **OpenCode**, and **Codex** — installation, configuration, troubleshooting.
+Engram on **Claude Code**, **OpenCode**, **Codex**, and **OpenClaw** — installation, configuration, troubleshooting.
 
 [English](INSTALL.md) · [中文](INSTALL_CN.md) · [Project overview](README.md)
 
@@ -11,6 +11,21 @@ Engram on **Claude Code**, **OpenCode**, and **Codex** — installation, configu
 ---
 
 ## TL;DR
+
+The easy path — one interactive command does everything:
+
+```bash
+pip install git+https://github.com/shannonxu-2018/Engram.git
+engram setup            # interactive: pick agent → install → enable → warmup → doctor
+```
+
+`setup` detects your installed agents and walks you through every step
+with a sensible default for each prompt (just press Enter). Pass `--yes`
+to accept all defaults non-interactively, or `--agent NAME` to skip the
+agent question.
+
+<details>
+<summary>Prefer to run the steps yourself?</summary>
 
 ```bash
 pip install git+https://github.com/shannonxu-2018/Engram.git
@@ -25,6 +40,8 @@ they collapse the most common new-user surprises (snippet not added,
 30 s model download mid-recall, "why is nothing happening?") into
 explicit, idempotent steps.  The `--agent` flag picks the integration;
 everything below is reference.
+
+</details>
 
 The legacy v0.3 form `engram install-skill` still works — it's an alias for `engram install --agent claude-code --no-mcp` (file-skill only, no MCP registration).
 
@@ -104,6 +121,11 @@ embedder works (smoke-test only, no semantic understanding).
 ---
 
 ## 3. Install for one or more agents
+
+> **Recommended:** `engram setup` wraps everything in this section plus
+> §3b into a single interactive wizard (with a default for every
+> prompt).  The per-agent commands below are for when you want manual
+> control or are scripting an unattended install.
 
 ```bash
 # Claude Code: file-based skill + MCP server registration
