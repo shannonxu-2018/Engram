@@ -22,6 +22,16 @@ pip install git+https://github.com/shannonxu-2018/Engram.git
 engram setup            # one interactive wizard: install + enable + warm up + verify
 ```
 
+After setup your agent uses Engram automatically — or drive it yourself from
+the CLI, no concepts to learn:
+
+```bash
+engram remember "I prefer tabs over spaces"         # save (personal, auto-named)
+engram remember "this repo uses pytest" --project   # project-scoped
+engram recall  "code style"                         # semantic search
+engram list                                         # browse · forget with: engram forget --name <slug>
+```
+
 ---
 
 ## Why Engram
@@ -46,6 +56,8 @@ engram setup            # one interactive wizard: install + enable + warm up + v
 | Avg query tokens             | 199.6               | 109.4        | — |
 
 > **Two-sided win:** more accurate **and** an order of magnitude cheaper in tokens. There is no always-loaded `MEMORY.md` index; recall returns one compact line per hit. Full bench: [`eval/RESULTS.md`](eval/RESULTS.md).
+>
+> *Read honestly:* this is a **controlled** benchmark — 40 synthetic memories with well-separated embeddings. On a real store (more memories, noisier, matches bunched in a narrow cosine-distance band) absolute numbers are lower and depend on your embedder. Treat 100 % as a ceiling, not a guarantee.
 
 Reproduce:
 

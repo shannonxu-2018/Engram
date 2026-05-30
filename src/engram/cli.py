@@ -265,6 +265,61 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     wu.set_defaults(func=_cmd_warmup)
 
+    # ── remember (the simple path) ──────────────────────────────────────
+    rem = sub.add_parser(
+        "remember",
+        help="Quickly save a memory — the simple path (auto type/name/importance).",
+    )
+    rem.add_argument("text", help="What to remember (a one-line fact or preference).")
+    rem.add_argument(
+        "--project", action="store_true",
+        help="Scope to THIS project (default: personal — follows you everywhere).",
+    )
+    rem.add_argument(
+        "--name", default=None,
+        help="Slug for later forget/links (default: auto-generated from the text).",
+    )
+    rem.add_argument(
+        "--pin", action="store_true",
+        help="Make it an always-on standing directive (injected every turn).",
+    )
+    rem.add_argument(
+        "--force", action="store_true",
+        help="Save even if a near-duplicate already exists.",
+    )
+    rem.set_defaults(func=_cmd_remember)
+
+    # ── recall / list / forget (core memory ops, now first-class on the CLI) ─
+    rcl = sub.add_parser("recall", help="Semantic search over your memories.")
+    rcl.add_argument("query")
+    rcl.add_argument("--k", type=int, default=None, help="Top-K (default: adaptive 2-10).")
+    rcl.add_argument("--type", default=None,
+                     choices=["user", "feedback", "project", "reference"])
+    rcl.add_argument("--tier", default=None, choices=["global", "local"])
+    rcl.add_argument("--with-content", dest="with_content", action="store_true")
+    rcl.add_argument("--json", dest="as_json", action="store_true")
+    rcl.set_defaults(func=_cmd_recall)
+
+    lst = sub.add_parser("list", help="Enumerate memories (no embedding cost).")
+    lst.add_argument("--type", default=None,
+                     choices=["user", "feedback", "project", "reference"])
+    lst.add_argument("--tier", default=None, choices=["global", "local"])
+    lst.add_argument("--limit", type=int, default=100)
+    lst.add_argument("--json", dest="as_json", action="store_true")
+    lst.set_defaults(func=_cmd_list)
+
+    fgt = sub.add_parser("forget", help="Delete memories by name / id / age.")
+    fgt.add_argument("--name", default=None)
+    fgt.add_argument("--id", type=int, default=None)
+    fgt.add_argument("--older-than", dest="older_than", type=float, default=None,
+                     help="Delete memories not accessed in this many days.")
+    fgt.add_argument("--type", default=None,
+                     choices=["user", "feedback", "project", "reference"])
+    fgt.add_argument("--tier", default=None, choices=["global", "local"])
+    fgt.add_argument("--dry-run", dest="dry_run", action="store_true",
+                     help="Preview what would be deleted without deleting.")
+    fgt.set_defaults(func=_cmd_forget)
+
     # ── directives ──────────────────────────────────────────────────────
     di = sub.add_parser(
         "directives",
@@ -459,6 +514,127 @@ def _cmd_warmup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _slugify(text: str, maxlen: int = 40) -> str:
+    """Make a kebab-case slug from free text; fall back to a short content
+    hash when the text has no ASCII words (e.g. pure Chinese)."""
+    import hashlib
+    import re
+    words = re.findall(r"[A-Za-z0-9]+", text.lower())
+    slug = "-".join(words)[:maxlen].strip("-")
+    if not slug:
+        slug = "note-" + hashlib.sha1(text.encode("utf-8")).hexdigest()[:8]
+    return slug
+
+
+def _cmd_remember(args: argparse.Namespace) -> int:
+    """The simple path: one positional arg, everything else defaulted.
+
+    `engram remember "<text>"` → a personal (user-tier) memory, importance
+    0.5, name auto-generated.  `--project` scopes it to the cwd's project;
+    `--pin` makes it an always-on standing directive.
+    """
+    from . import MemoryManager
+
+    text = args.text.strip()
+    if not text:
+        print("remember: nothing to save (empty text).", file=sys.stderr)
+        return 2
+    mem_type = "project" if args.project else "user"
+    name = args.name or _slugify(text)
+    tags = ["pin"] if args.pin else []
+    try:
+        with MemoryManager() as mgr:
+            res = mgr.save(
+                type=mem_type, name=name, description=text,
+                tags=tags, importance=0.5, force=args.force,
+            )
+    except Exception as e:
+        print(f"remember failed: {e}", file=sys.stderr)
+        return 1
+    if res.status == "merge_suggestion" and res.duplicate_of is not None:
+        dup = res.duplicate_of
+        print(f"a near-duplicate already exists: [{dup.id}] {dup.name} — {dup.description}")
+        print("re-run with --force to save anyway, or rephrase.")
+        return 2
+    scope = "this project" if args.project else "all projects"
+    pinned = ", pinned (always-on)" if args.pin else ""
+    print(f"remembered: [{res.id}] {name}  ({mem_type}, {scope}{pinned})")
+    return 0
+
+
+def _emit_hits(hits, *, as_json: bool = False, with_content: bool = False) -> None:
+    """Compact one-line-per-hit output shared by recall / list / forget."""
+    if as_json:
+        import json
+        print(json.dumps([h.to_dict() for h in hits], ensure_ascii=False, indent=2))
+        return
+    if not hits:
+        print("(no hits)")
+        return
+    for h in hits:
+        desc = h.description.replace("\n", " ").replace("\r", " ")
+        print(f"{h.id:>5} | {h.tier[:1]} | {h.type:<9} | {h.name:<24} | "
+              f"d={h.distance:.3f} | {desc}")
+        if with_content and h.content:
+            for ln in h.content.splitlines():
+                print(f"      | {ln}")
+
+
+def _cmd_recall(args: argparse.Namespace) -> int:
+    from . import MemoryManager
+    try:
+        with MemoryManager() as mgr:
+            hits = mgr.recall(
+                args.query, k=args.k,
+                types=[args.type] if args.type else None,
+                tiers=[args.tier] if args.tier else None,
+                with_content=args.with_content,
+            )
+    except Exception as e:
+        print(f"recall failed: {e}", file=sys.stderr)
+        return 1
+    _emit_hits(hits, as_json=args.as_json, with_content=args.with_content)
+    return 0
+
+
+def _cmd_list(args: argparse.Namespace) -> int:
+    from . import MemoryManager
+    try:
+        with MemoryManager() as mgr:
+            hits = mgr.list(type=args.type, tier=args.tier, limit=args.limit)
+    except Exception as e:
+        print(f"list failed: {e}", file=sys.stderr)
+        return 1
+    _emit_hits(hits, as_json=args.as_json)
+    return 0
+
+
+def _cmd_forget(args: argparse.Namespace) -> int:
+    from . import MemoryManager
+    try:
+        with MemoryManager() as mgr:
+            if args.dry_run:
+                targets = mgr.find_for_forget(
+                    name=args.name, id=args.id, type=args.type,
+                    tier=args.tier, older_than_days=args.older_than,
+                )
+                print(f"would delete {len(targets)}:")
+                _emit_hits(targets)
+                return 0
+            n = mgr.forget(
+                name=args.name, id=args.id, type=args.type,
+                tier=args.tier, older_than_days=args.older_than,
+            )
+    except ValueError as e:  # e.g. no selector given
+        print(f"forget: {e}", file=sys.stderr)
+        return 2
+    except Exception as e:
+        print(f"forget failed: {e}", file=sys.stderr)
+        return 1
+    print(f"forgot {n} memor{'y' if n == 1 else 'ies'}")
+    return 0
+
+
 def _cmd_directives(args: argparse.Namespace) -> int:
     """Print standing directives for injection.
 
@@ -467,14 +643,8 @@ def _cmd_directives(args: argparse.Namespace) -> int:
     embedder config, missing store, …) it prints a short note to stderr and
     exits 0 with no stdout — never block or pollute the turn.  Empty result =
     no output, so nothing is injected when there are no directives.
+    (UTF-8 stdout is already forced by ``main()`` for every subcommand.)
     """
-    # Hook pipes default to the OS code page on Windows (cp936/GBK), which
-    # mangles non-ASCII directive text.  Force UTF-8 so injected Chinese etc.
-    # round-trips intact.
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-    except Exception:
-        pass
     try:
         from . import MemoryManager
 
@@ -517,7 +687,18 @@ def _inst_list_agents() -> list[str]:
     return list_agents()
 
 
+def _force_utf8_io() -> None:
+    """Force UTF-8 stdout/stderr so non-ASCII output survives Windows
+    consoles / hook pipes that default to cp936/GBK.  Best-effort."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    _force_utf8_io()
     parser = _build_parser()
     args = parser.parse_args(argv)
     rc = args.func(args)

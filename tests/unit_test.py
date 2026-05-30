@@ -318,6 +318,19 @@ def test_rerank_band_zero_is_pure_distance() -> None:
             os.environ["ENGRAM_RANK_PROTECT_BAND"] = saved
 
 
+# ── Test: _slugify (remember auto-naming) ────────────────────────────────────
+
+def test_slugify_simple_path() -> None:
+    from engram.cli import _slugify
+    _assert(_slugify("I prefer tabs over spaces") == "i-prefer-tabs-over-spaces",
+            "ascii text → kebab slug")
+    _assert(_slugify("我喜欢用 tabs") == "tabs",
+            "mixed text extracts ascii words")
+    s = _slugify("纯中文没有英文词")
+    _assert(s.startswith("note-") and len(s) == 13,
+            f"pure-CJK falls back to note-<8hex> (got {s})")
+
+
 # ── Test 1: H3 — OpenAIEmbedder ctor validation ──────────────────────────────
 
 def test_openai_ctor_validation() -> None:
@@ -694,6 +707,9 @@ def main() -> None:
     print("\n--- directives (standing always-on constraints) ---")
     test_directives_returns_only_pinned_readonly()
     test_directives_respects_budget()
+
+    print("\n--- remember _slugify ---")
+    test_slugify_simple_path()
 
     print("\nALL UNIT TESTS PASSED.")
 

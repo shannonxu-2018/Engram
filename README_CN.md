@@ -22,6 +22,15 @@ pip install git+https://github.com/shannonxu-2018/Engram.git
 engram setup            # 一条交互式向导：安装 + 启用 + 预热 + 体检
 ```
 
+装好后 agent 会自动用 Engram —— 也可以自己从 CLI 直接驱动,不用学那套概念:
+
+```bash
+engram remember "我喜欢用 tabs 不用空格"          # 存(个人, 自动命名)
+engram remember "本仓库用 pytest" --project       # 工程级
+engram recall  "代码风格"                         # 语义搜索
+engram list                                       # 浏览 · 删除: engram forget --name <slug>
+```
+
 ---
 
 ## 为什么用 Engram
@@ -46,6 +55,8 @@ engram setup            # 一条交互式向导：安装 + 启用 + 预热 + 体
 | 平均每查询 token                 | 199.6           | 109.4        | — |
 
 > **双向收益**：Engram 既**更准**（三档难度全 100 % Recall@3），又**更省 token**（量级差）。没有常驻的 `MEMORY.md` 索引；recall 返回的是紧凑的"一行一条"。完整对照：[`eval/RESULTS.md`](eval/RESULTS.md)。
+>
+> *如实说明：* 这是**受控**基准——40 条合成记忆、嵌入区分度高。真实库（更多、更噪、距离挤在窄带）里的绝对数字会更低,且取决于你的嵌入器。把 100% 当成上限,而非保证。
 
 复现：
 

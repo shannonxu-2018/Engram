@@ -44,10 +44,27 @@ def _find_repo_upwards(start: Path, max_levels: int = 8) -> Optional[Path]:
     return None
 
 
+def force_utf8_io() -> None:
+    """Force UTF-8 on stdout/stderr.
+
+    Skill scripts print memory text that is frequently non-ASCII (Chinese,
+    emoji, accents).  On Windows the console / a hook's stdout pipe defaults
+    to the OEM code page (cp936/GBK), which mangles that text.  Reconfiguring
+    to UTF-8 makes output round-trip intact everywhere.  Best-effort: some
+    wrapped streams don't support reconfigure.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
 def bootstrap() -> Optional[Path]:
     """Ensure ``engram`` is importable. Returns the directory added to
     ``sys.path`` if one was located, or ``None`` if engram was already
     importable (installed)."""
+    force_utf8_io()
     # 1) Already importable? Nothing to do.
     if importlib.util.find_spec("engram") is not None:
         return None

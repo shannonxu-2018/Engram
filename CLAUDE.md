@@ -120,7 +120,13 @@ Engram now ships with three integration profiles defined in
 * **Installer split**: agent-aware logic in `src/engram/install.py`;
   `src/engram/install_skill.py` is a back-compat shim that delegates
   to it.
-* **CLI** has nine top-level subcommands:
+* **CLI** now exposes the **core memory ops directly** — `engram remember`
+  / `recall` / `list` / `forget` / `directives` — not just management
+  commands.  `engram remember "<text>"` is the simple path (type=user
+  default, `_slugify` auto-name, importance 0.5; `--project` / `--pin` to
+  vary); `recall` / `list` / `forget` mirror the skill scripts (shared
+  `_emit_hits`).  `main()` forces UTF-8 stdout for every subcommand.
+  Management subcommands:
   * `engram install --agent {claude-code,opencode,codex,openclaw,all}` —
     user-level skill + MCP install (the v0.3 `install-skill` is a
     Claude-Code-skill-only alias and still works).  The per-turn
