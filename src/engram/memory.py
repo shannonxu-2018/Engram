@@ -345,16 +345,22 @@ class MemoryManager:
         tier = self._tiers[tier_name]
         coll = tier.collection
 
+        # ── Embed first (use the description + content for richer signal) ──
+        # Do this *before* any store mutation: if the embedder raises (e.g.
+        # an OpenAI/HTTP backend network error), we must not have already
+        # deleted the existing same-name row — otherwise an overwrite would
+        # silently lose the memory it was trying to update.
+        text_for_embed = description if not content else f"{description}\n{content}"
+        vec = self._embedder.embed(text_for_embed, kind="passage")
+
         # ── Optional overwrite-by-name ────────────────────────────────────
+        # Runs after the embed succeeded, but still before the dedup check so
+        # the row we're replacing can't self-match in _closest().
         actually_overwrote = False
         if overwrite_by_name:
             for existing in self._find_by_name(tier_name, type, name):
                 coll.delete(existing["mem_id"])
                 actually_overwrote = True
-
-        # ── Embed (use the description + content for richer signal) ───────
-        text_for_embed = description if not content else f"{description}\n{content}"
-        vec = self._embedder.embed(text_for_embed, kind="passage")
 
         # ── Pattern separation: dedup check ───────────────────────────────
         if not force:
@@ -847,12 +853,14 @@ class MemoryManager:
             coll.flush()
             return self._row_to_hit(tier_name, mem_id, row)
 
-        # ── 5. Re-embed path: delete the old row, insert the new one ─────
+        # ── 5. Re-embed path: insert the new row, *then* delete the old ──
+        # Insert-before-delete (rather than the reverse) means a crash or
+        # exception mid-operation leaves at worst a recoverable duplicate,
+        # never a net loss.  The embed runs first so a backend failure
+        # mutates nothing.  ``created_at`` / ``hits`` are read off the still-
+        # live ``row`` dict before the delete pops it.
         text_for_embed = new_desc if not new_content else f"{new_desc}\n{new_content}"
         vec = self._embedder.embed(text_for_embed, kind="passage")
-
-        coll.delete(mem_id)
-        coll.flush()
 
         target_coll = self._tiers[new_tier_name].collection
         new_row = {
@@ -868,8 +876,17 @@ class MemoryManager:
             "vector":      vec,
         }
         ids = target_coll.insert([new_row])
+        new_id = int(ids[0])  # auto_id ⇒ new_id != mem_id, no PK collision
+
+        coll.delete(mem_id)
+
+        # Flush each affected collection once.  Same-tier patch touches a
+        # single collection, so a lone flush persists both the insert and
+        # the delete atomically (one sidecar write).
         target_coll.flush()
-        new_id = int(ids[0])
+        if coll is not target_coll:
+            coll.flush()
+
         final_row = target_coll._rows[new_id]  # type: ignore[attr-defined]
         return self._row_to_hit(new_tier_name, new_id, final_row)
 

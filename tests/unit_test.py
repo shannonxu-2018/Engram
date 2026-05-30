@@ -49,6 +49,160 @@ def _expect_raises(exc_type, func, msg: str) -> None:
     sys.exit(1)
 
 
+# ── Stub embedder + env helper for MemoryManager durability tests ────────────
+
+class _StubEmbedder:
+    """Deterministic, network-free embedder for MemoryManager tests.
+
+    Produces a stable unit vector per text so inserts/searches are
+    reproducible.  Set ``fail_on`` to a substring to make :meth:`embed`
+    raise whenever the text-to-embed contains it — used to simulate a
+    backend failure mid-operation.
+    """
+
+    def __init__(self, dim: int = 16):
+        self.dim = dim
+        self.fail_on = None  # type: ignore[assignment]
+
+    def _vec(self, text: str):
+        import hashlib
+        import numpy as np
+        h = hashlib.sha256(text.encode("utf-8")).digest()[: self.dim]
+        v = np.frombuffer(h, dtype=np.uint8).astype(np.float32)
+        n = float(np.linalg.norm(v)) or 1.0
+        return (v / n).astype(np.float32)
+
+    def embed(self, text: str, *, kind: str = "passage"):
+        if self.fail_on is not None and self.fail_on in text:
+            raise RuntimeError("simulated embed failure")
+        return self._vec(text)
+
+    def embed_batch(self, texts, *, kind: str = "passage"):
+        import numpy as np
+        return np.stack([self.embed(t, kind=kind) for t in texts])
+
+
+def _engram_home(root: Path):
+    """Context manager pointing ENGRAM_HOME / CLAUDE_HOME at a temp dir so
+    tests never touch the real ~/.claude global tier."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _cm():
+        saved = {k: os.environ.get(k) for k in ("ENGRAM_HOME", "CLAUDE_HOME")}
+        os.environ["ENGRAM_HOME"] = str(root)
+        os.environ["CLAUDE_HOME"] = str(root)
+        try:
+            yield
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    return _cm()
+
+
+# ── Test: save(overwrite_by_name) embed failure must not lose the old row ─────
+
+def test_save_overwrite_embed_failure_preserves_old() -> None:
+    """Regression: ``save(overwrite_by_name=True)`` embeds *before* deleting,
+    so a failing embedder leaves the existing same-name memory intact."""
+    from engram import MemoryManager
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        with _engram_home(root):
+            emb = _StubEmbedder()
+            with MemoryManager(embedder=emb, project_root=root) as mgr:
+                mgr.save("project", "foo", "original gist",
+                         content="body one", force=True)
+                before = [h for h in mgr.list() if h.name == "foo"]
+                _assert(len(before) == 1, "seed memory 'foo' present")
+                old_id = before[0].id
+
+                # Now overwrite, but make the embed of the *new* text fail.
+                emb.fail_on = "new gist"
+                _expect_raises(
+                    RuntimeError,
+                    lambda: mgr.save("project", "foo", "new gist",
+                                     content="body two", overwrite_by_name=True),
+                    "overwrite with a failing embed raises",
+                )
+
+                after = [h for h in mgr.list() if h.name == "foo"]
+                _assert(
+                    len(after) == 1 and after[0].id == old_id,
+                    "'foo' survived the failed overwrite (no data loss)",
+                )
+
+
+# ── Test: patch() re-embed must not lose data if a flush crashes ─────────────
+
+def test_patch_reembed_flush_crash_preserves_memory() -> None:
+    """Regression: ``patch()`` inserts the re-embedded row *before* deleting
+    the old one, so a crash during flush leaves the memory recoverable
+    (here: still live in-memory) rather than lost."""
+    from engram import MemoryManager
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        with _engram_home(root):
+            with MemoryManager(embedder=_StubEmbedder(), project_root=root) as mgr:
+                mgr.save("project", "bar", "gist one", content="b", force=True)
+                seed = [h for h in mgr.list() if h.name == "bar"]
+                old_id = seed[0].id
+
+                coll = mgr._tiers["local"].collection
+                orig_flush = coll.flush
+                state = {"n": 0}
+
+                def boom():
+                    state["n"] += 1
+                    if state["n"] == 1:
+                        raise RuntimeError("simulated flush crash")
+                    return orig_flush()
+
+                coll.flush = boom  # type: ignore[method-assign]
+                _expect_raises(
+                    RuntimeError,
+                    lambda: mgr.patch("bar", description="new gist"),
+                    "patch re-embed surfaces the flush crash",
+                )
+                coll.flush = orig_flush  # type: ignore[method-assign]
+
+                rows = [h for h in mgr.list() if h.name == "bar"]
+                _assert(
+                    len(rows) == 1 and rows[0].description.startswith("new gist"),
+                    "'bar' survived the flush crash as the re-embedded row",
+                )
+                _assert(rows[0].id != old_id,
+                        "re-embed allocated a fresh id (insert happened first)")
+
+
+def test_patch_reembed_happy_path_carries_metadata() -> None:
+    """A clean re-embed patch: new id, but created_at / hits carried over."""
+    from engram import MemoryManager
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        with _engram_home(root):
+            with MemoryManager(embedder=_StubEmbedder(), project_root=root) as mgr:
+                mgr.save("project", "baz", "g1", content="c1", force=True)
+                orig = [h for h in mgr.list() if h.name == "baz"][0]
+                hit = mgr.patch("baz", description="g2")
+                _assert(hit.id != orig.id,
+                        "re-embed changes the id (delete + reinsert)")
+                _assert(hit.created_at == orig.created_at,
+                        "created_at carried over to the re-embedded row")
+                _assert(hit.hits == orig.hits,
+                        "hits carried over to the re-embedded row")
+                survivors = [h for h in mgr.list() if h.name == "baz"]
+                _assert(len(survivors) == 1,
+                        "exactly one 'baz' remains after re-embed (old gone)")
+
+
 # ── Test 1: H3 — OpenAIEmbedder ctor validation ──────────────────────────────
 
 def test_openai_ctor_validation() -> None:
@@ -411,6 +565,11 @@ def main() -> None:
 
     print("\n--- adaptive_k parameterised ---")
     test_adaptive_k()
+
+    print("\n--- save/patch durability (data-loss windows) ---")
+    test_save_overwrite_embed_failure_preserves_old()
+    test_patch_reembed_flush_crash_preserves_memory()
+    test_patch_reembed_happy_path_carries_metadata()
 
     print("\nALL UNIT TESTS PASSED.")
 
