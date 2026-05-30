@@ -675,6 +675,107 @@ def test_setup_noninteractive_guard() -> None:
     _assert(rc == 2, f"non-interactive setup without --yes returns 2, got {rc}")
 
 
+# ── uninstall (v0.4: engram uninstall) ──────────────────────────────────────
+
+def test_uninstall_strip_block_round_trips_init() -> None:
+    """``_strip_engram_block`` removes exactly what ``init`` appended,
+    leaving surrounding prose and a following section intact."""
+    from engram.agents import get_profile
+    from engram.uninstall_engram import _strip_engram_block
+
+    prof = get_profile("claude-code")
+    prose = "# My Project\n\nSome prose.\n"
+    snippet = prof.render_instructions_snippet().rstrip() + "\n"
+    after = "\n# Other\n\ntrailing.\n"
+    text = prose + "\n" + snippet + after
+
+    stripped, found = _strip_engram_block(text)
+    _assert(found, "block was found and removed")
+    _assert("use Engram" not in stripped, "engram marker gone")
+    _assert("Some prose." in stripped, "leading prose preserved")
+    _assert("# Other" in stripped and "trailing." in stripped,
+            "following section preserved")
+    # Idempotent: a second strip is a no-op.
+    again, found2 = _strip_engram_block(stripped)
+    _assert(not found2 and again == stripped,
+            "second strip finds nothing and changes nothing")
+
+
+def test_uninstall_strip_block_absent_is_noop() -> None:
+    """No Engram block ⇒ text returned unchanged, found=False."""
+    from engram.uninstall_engram import _strip_engram_block
+
+    text = "# Plain\n\nNothing to see.\n"
+    out, found = _strip_engram_block(text)
+    _assert(not found and out == text,
+            "absent block leaves text untouched")
+
+
+def test_uninstall_project_reverses_init() -> None:
+    """``uninstall_project`` undoes ``init``: strips the block, drops the
+    .gitignore rule, and (with purge) deletes the local store."""
+    import os
+    from engram import init_project, uninstall_engram
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "CLAUDE.md").write_text("# Proj\n\nhello\n", encoding="utf-8")
+        (root / ".gitignore").write_text("node_modules/\n", encoding="utf-8")
+        init_project.init(agent="claude-code", project_root=root)
+        # Simulate a populated local store.
+        (root / ".claude" / "engram" / "local.pst").write_text("x", encoding="utf-8")
+
+        rc = uninstall_engram.uninstall_project(
+            agent="claude-code", project_root=root, purge_data=True,
+        )
+        _assert(rc == 0, f"uninstall_project exits 0 (got {rc})")
+        md = (root / "CLAUDE.md").read_text(encoding="utf-8")
+        gi = (root / ".gitignore").read_text(encoding="utf-8")
+        _assert("use Engram" not in md and "hello" in md,
+                "block stripped, original prose kept")
+        _assert(".claude/engram/" not in gi and "node_modules" in gi,
+                "gitignore rule removed, sibling rule kept")
+        _assert(not (root / ".claude" / "engram").exists(),
+                "--purge deleted the local store dir")
+
+
+def test_uninstall_project_keep_data() -> None:
+    """Without purge, the local store survives the uninstall."""
+    from engram import init_project, uninstall_engram
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        init_project.init(agent="claude-code", project_root=root)
+        (root / ".claude" / "engram" / "local.pst").write_text("x", encoding="utf-8")
+        uninstall_engram.uninstall_project(
+            agent="claude-code", project_root=root, purge_data=False,
+        )
+        _assert((root / ".claude" / "engram" / "local.pst").exists(),
+                "keep-data leaves the local store intact")
+
+
+def test_uninstall_gitignore_preserves_other_rules() -> None:
+    """Only the engram rule + our comment are removed from .gitignore."""
+    from engram.uninstall_engram import _unwire_gitignore, _GITIGNORE_COMMENT
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / ".gitignore").write_text(
+            "node_modules/\n"
+            f"{_GITIGNORE_COMMENT}\n"
+            ".claude/engram/\n"
+            "*.log\n",
+            encoding="utf-8",
+        )
+        rc = _unwire_gitignore(root)
+        _assert(rc == 0, "unwire_gitignore exits 0")
+        gi = (root / ".gitignore").read_text(encoding="utf-8")
+        _assert(".claude/engram/" not in gi, "engram rule removed")
+        _assert(_GITIGNORE_COMMENT not in gi, "engram comment removed")
+        _assert("node_modules/" in gi and "*.log" in gi,
+                "unrelated rules preserved")
+
+
 # ── Driver ───────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -726,6 +827,13 @@ def main() -> None:
     test_setup_select_agents_default_noninteractive()
     test_setup_ask_yes_no_defaults()
     test_setup_noninteractive_guard()
+
+    print("\n--- uninstall: engram uninstall ---")
+    test_uninstall_strip_block_round_trips_init()
+    test_uninstall_strip_block_absent_is_noop()
+    test_uninstall_project_reverses_init()
+    test_uninstall_project_keep_data()
+    test_uninstall_gitignore_preserves_other_rules()
 
     print("\nALL AGENTS-LAYER TESTS PASSED.")
 

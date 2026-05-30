@@ -2,7 +2,7 @@
 
 # Engram
 
-**Vector memory for AI coding agents — semantic, cheap, hippocampus-inspired.**
+**Vector memory for AI agents — semantic, cheap, hippocampus-inspired.**
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -123,7 +123,7 @@ git clone https://github.com/shannonxu-2018/Engram.git && cd Engram
 
 ## The `engram` CLI
 
-Seven top-level subcommands.  Run `engram <cmd> --help` for the full
+Eight top-level subcommands.  Run `engram <cmd> --help` for the full
 flag list; the table below covers the everyday invocation.
 
 | Command | What it does | Most common form |
@@ -131,6 +131,7 @@ flag list; the table below covers the everyday invocation.
 | **`setup`** | **Interactive wizard (recommended).** Detects your agents, then runs install → enable-globally → warmup → doctor, with a default for every prompt.  `--yes` for an unattended run, `--agent NAME` to preselect. | `engram setup` |
 | **`install`** | Sets up Engram for one agent (or `--agent all`).  Copies/symlinks the file-based skill into the agent's skill dir **and** registers the `engram-mcp` server in the agent's MCP config. Idempotent. | `engram install --agent claude-code` |
 | **`init`** | Wires the **current project** to actually *use* Engram: appends the instructions snippet to `CLAUDE.md` / `AGENTS.md`, adds `.claude/engram/` to `.gitignore`, creates the local-tier directory.  Idempotent — re-runs are no-ops unless `--force`. | `engram init` |
+| **`uninstall`** | One-click teardown, by scope. `--scope project` reverses `init` (strips the Engram block from `CLAUDE.md`/`AGENTS.md`, drops the `.gitignore` line); `--scope global` reverses `install` (removes the skill, unregisters MCP, strips the per-agent user-level snippet); `--scope all` does both. Omit `--scope` to be asked. Stored memories are **kept** unless you pass `--purge`. | `engram uninstall --scope project` |
 | **`warmup`** | Pre-loads the embedder so the first `recall` doesn't pay 30 s of cold-start.  For the local backend, also pre-downloads the ~471 MB `multilingual-e5-small` model from HuggingFace. | `engram warmup` |
 | **`doctor`** | One-shot health check across package install, PistaDB native lib, embedder spec, e5 model cache, every agent's skill+MCP state, the `.pst` tier files, and `engram-mcp` on PATH.  Prints copy-pasteable fix commands for anything not OK.  Exit codes: `0` OK / `1` warnings / `2` errors. | `engram doctor` |
 | **`agents`** | List the four built-in agents and their integration mode. | `engram agents` |

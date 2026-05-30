@@ -370,6 +370,47 @@ register_embedder("my-backend", _my_factory)
 
 ## 8. 卸载
 
+### 8a. 一键卸载（推荐）
+
+`engram uninstall` 按**范围**拆除，不用记一串命令：
+
+```bash
+# 交互式：会问你卸“工程”还是“全局”，再问要不要删记忆数据
+engram uninstall
+
+# 只撤销当前工程的接入（= 撤销 `engram init`）：
+#   从 CLAUDE.md / AGENTS.md 删掉 Engram 段落、去掉 .gitignore 那行
+engram uninstall --scope project
+
+# 卸掉全局安装（= 撤销 `engram install`）：
+#   删 skill、注销 MCP、删掉各 agent 用户级指令片段
+engram uninstall --scope global
+
+# 两者都做：
+engram uninstall --scope all
+
+# 连向量库数据一起删（不可恢复）。不加 --purge 时默认保留记忆：
+engram uninstall --scope all --purge
+
+# 非交互（脚本里用）：默认 scope=project、保留数据
+engram uninstall --scope global --yes
+```
+
+常用 flag：
+
+| flag | 作用 |
+|------|------|
+| `--scope {project,global,all}` | 卸载范围；省略则交互式询问。 |
+| `--agent NAME` | 只针对某个 agent（默认所有 agent）。 |
+| `--in PATH` | 指定要撤销接入的工程根目录（默认当前目录）。 |
+| `--purge` | 同时删掉已存的向量库记忆（不可恢复）。 |
+| `--keep-data` | 明确保留记忆，不再询问（默认行为）。 |
+| `--yes` / `-y` | 非交互：直接用默认值（scope=project、保留数据）。 |
+
+每一步都幂等——半途中断后重跑无害。
+
+### 8b. 手动方式（仍然可用）
+
 ```bash
 # 单独卸载某个 agent（同时清理 skill 文件和 MCP 注册）：
 engram install --agent claude-code --remove

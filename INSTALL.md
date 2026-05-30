@@ -389,6 +389,48 @@ register_embedder("my-backend", _my_factory)
 
 ## 8. Uninstall
 
+### 8a. One-click uninstall (recommended)
+
+`engram uninstall` tears Engram down **by scope**, so you don't have to
+remember a string of commands:
+
+```bash
+# Interactive: asks project-vs-global, then whether to delete memory data
+engram uninstall
+
+# Undo just the current project's wiring (= reverse of `engram init`):
+#   strips the Engram block from CLAUDE.md / AGENTS.md, drops the .gitignore line
+engram uninstall --scope project
+
+# Undo the global install (= reverse of `engram install`):
+#   removes the skill, unregisters MCP, strips each agent's user-level snippet
+engram uninstall --scope global
+
+# Both:
+engram uninstall --scope all
+
+# Also delete the vector stores (irreversible). Without --purge, memories are kept:
+engram uninstall --scope all --purge
+
+# Non-interactive (for scripts): defaults to scope=project, keep data
+engram uninstall --scope global --yes
+```
+
+Common flags:
+
+| flag | effect |
+|------|--------|
+| `--scope {project,global,all}` | What to remove; omit to be asked interactively. |
+| `--agent NAME` | Narrow to one agent (default: all agents). |
+| `--in PATH` | Project root to un-wire (default: current directory). |
+| `--purge` | Also delete the stored vector memories (irreversible). |
+| `--keep-data` | Keep memories without being asked (the default). |
+| `--yes` / `-y` | Non-interactive: accept defaults (scope=project, keep data). |
+
+Every step is idempotent — a half-applied uninstall can simply be re-run.
+
+### 8b. Manual (still supported)
+
 ```bash
 # Uninstall for a single agent (removes file-skill + MCP registration):
 engram install --agent claude-code --remove

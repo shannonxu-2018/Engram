@@ -2,7 +2,7 @@
 
 # Engram
 
-**为 AI 编码 agent 设计的向量记忆系统 —— 语义化、低成本、海马体启发。**
+**为 AI agent 设计的向量记忆系统 —— 语义化、低成本、海马体启发。**
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -117,13 +117,14 @@ git clone https://github.com/shannonxu-2018/Engram.git && cd Engram
 
 ## `engram` CLI
 
-七个顶层子命令。任意一条带 `--help` 看完整 flag 列表；下表只列日常用法。
+八个顶层子命令。任意一条带 `--help` 看完整 flag 列表；下表只列日常用法。
 
 | 命令 | 用途 | 最常见用法 |
 |------|------|-----------|
 | **`setup`** | **交互式向导（推荐）。** 探测你的 agent，然后依次跑 安装 → 全局启用 → warmup → doctor，每个提问都有默认值。`--yes` 无人值守，`--agent NAME` 预选 agent。| `engram setup` |
 | **`install`** | 为某个 agent 装好 Engram（或 `--agent all`）。把文件式 skill 拷贝/symlink 到 agent 的 skill 目录，**同时**在 agent 的 MCP 配置里注册 `engram-mcp` server。幂等。 | `engram install --agent claude-code` |
 | **`init`** | 把**当前工程**真正接入 Engram：在 `CLAUDE.md` / `AGENTS.md` 末尾追加指令片段，把 `.claude/engram/` 加进 `.gitignore`，创建 local tier 目录。幂等——重跑是 no-op，除非 `--force`。| `engram init` |
+| **`uninstall`** | 一键卸载，按范围选。`--scope project` 撤销 `init`（从 `CLAUDE.md`/`AGENTS.md` 里删掉 Engram 段落、去掉 `.gitignore` 那行）；`--scope global` 撤销 `install`（删 skill、注销 MCP、删掉各 agent 用户级指令片段）；`--scope all` 两者都做。省略 `--scope` 会交互式询问。除非加 `--purge`，否则**保留**已存的记忆。| `engram uninstall --scope project` |
 | **`warmup`** | 提前加载 embedder，避免第一次 `recall` 卡 30 秒冷启动。本地后端的话，也会提前从 HuggingFace 把 ~471 MB 的 `multilingual-e5-small` 模型下到本地。| `engram warmup` |
 | **`doctor`** | 一条命令做全面体检：包是否能 import、PistaDB 原生库、embedder spec、e5 模型缓存、每家 agent 的 skill+MCP 状态、`.pst` tier 文件、`engram-mcp` 在不在 PATH 上。每个非 OK 项给出可粘贴的修复命令。退出码：`0` OK / `1` warning / `2` error。 | `engram doctor` |
 | **`agents`** | 列出四家内置 agent + 集成方式。 | `engram agents` |

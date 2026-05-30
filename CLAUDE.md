@@ -107,7 +107,7 @@ Engram now ships with three integration profiles defined in
 * **Installer split**: agent-aware logic in `src/engram/install.py`;
   `src/engram/install_skill.py` is a back-compat shim that delegates
   to it.
-* **CLI** has six top-level subcommands:
+* **CLI** has seven top-level subcommands:
   * `engram install --agent {claude-code,opencode,codex,openclaw,all}` —
     user-level skill + MCP install (the v0.3 `install-skill` is a
     Claude-Code-skill-only alias and still works).
@@ -115,6 +115,14 @@ Engram now ships with three integration profiles defined in
     appends the instructions snippet to `CLAUDE.md` / `AGENTS.md`, adds
     `.claude/engram/` to `.gitignore`, creates the local-tier directory.
     Idempotent.  Implementation: `src/engram/init_project.py`.
+  * `engram uninstall [--scope {project,global,all}] [--agent NAME]
+    [--in PATH] [--purge | --keep-data] [--yes]` — one-click teardown.
+    `project` reverses `init` (strips the `CLAUDE.md`/`AGENTS.md` Engram
+    block, drops the `.gitignore` line); `global` reverses `install`
+    (skill + MCP + the per-agent user-level snippet).  `--purge` also
+    deletes the vector store (`global.{pst,pcc}` / local `.claude/engram/`);
+    memories are kept by default.  Scope/purge are asked interactively
+    when omitted.  Implementation: `src/engram/uninstall_engram.py`.
   * `engram warmup [--spec SPEC]` — preloads the embedder + runs three
     dummy embeds so the first real recall doesn't pay 30 s of cold
     start.  For the local backend, also pre-downloads the e5 model.

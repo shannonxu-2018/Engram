@@ -13,6 +13,7 @@ Subcommands:
                             [--no-skill] [--no-mcp]
     engram install-skill   (alias of `install --no-mcp`, kept for back-compat)
     engram setup           interactive wizard: install + enable + warmup + doctor
+    engram uninstall       one-click teardown by scope (project / global / all)
     engram agents          list known agents and their integration mode
     engram version
     engram --version
@@ -192,6 +193,45 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     ini.set_defaults(func=_cmd_init)
 
+    # ── uninstall ───────────────────────────────────────────────────────
+    from .agents import list_agents as _la_for_uninstall
+    un = sub.add_parser(
+        "uninstall",
+        help="One-click teardown: remove the project-level wiring, the "
+             "global skill+MCP install, or both.",
+    )
+    un.add_argument(
+        "--scope",
+        choices=["project", "global", "all"],
+        default=None,
+        help="What to remove: 'project' (reverse of `engram init`), "
+             "'global' (reverse of `engram install`), or 'all'. "
+             "Omit to be asked interactively.",
+    )
+    un.add_argument(
+        "--agent",
+        default=None,
+        choices=_la_for_uninstall() + ["all"],
+        help="Narrow to one agent (default: all agents).",
+    )
+    un.add_argument(
+        "--in", dest="project_root", default=None,
+        help="Project root to un-wire (default: current working directory).",
+    )
+    un.add_argument(
+        "--purge", action="store_true",
+        help="Also DELETE the stored vector memories (irreversible).",
+    )
+    un.add_argument(
+        "--keep-data", action="store_true",
+        help="Keep stored memories without being asked (the safe default).",
+    )
+    un.add_argument(
+        "--yes", "-y", dest="assume_yes", action="store_true",
+        help="Non-interactive: accept defaults (scope=project, keep data).",
+    )
+    un.set_defaults(func=_cmd_uninstall)
+
     # ── doctor ──────────────────────────────────────────────────────────
     doc = sub.add_parser(
         "doctor",
@@ -330,6 +370,31 @@ def _cmd_init(args: argparse.Namespace) -> int:
         with_snippet=not args.no_snippet,
         with_gitignore=not args.no_gitignore,
         force=args.force,
+    )
+
+
+def _cmd_uninstall(args: argparse.Namespace) -> int:
+    from . import uninstall_engram
+
+    if args.purge and args.keep_data:
+        print(
+            "--purge and --keep-data are contradictory — pick one.",
+            file=sys.stderr,
+        )
+        return 2
+    # purge tri-state: True (--purge) / False (--keep-data) / None (ask).
+    if args.purge:
+        purge: Optional[bool] = True
+    elif args.keep_data:
+        purge = False
+    else:
+        purge = None
+    return uninstall_engram.run(
+        scope=args.scope,
+        agent=args.agent,
+        project_root=args.project_root,
+        purge=purge,
+        assume_yes=args.assume_yes,
     )
 
 
