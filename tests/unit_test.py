@@ -203,6 +203,28 @@ def test_patch_reembed_happy_path_carries_metadata() -> None:
                         "exactly one 'baz' remains after re-embed (old gone)")
 
 
+# ── Test: FileLock (concurrent-write protection) ─────────────────────────────
+
+def test_filelock_mutex() -> None:
+    """A second acquire on a held lock times out; works again after release."""
+    from engram._lock import FileLock
+
+    with tempfile.TemporaryDirectory() as td:
+        lp = str(Path(td) / "x.lock")
+        a = FileLock(lp, timeout=0.3)
+        a.acquire()
+        try:
+            b = FileLock(lp, timeout=0.3)
+            _expect_raises(TimeoutError, b.acquire,
+                           "second lock times out while the first is held")
+        finally:
+            a.release()
+        # The lock must be re-acquirable once released.
+        with FileLock(lp, timeout=0.3):
+            pass
+        _assert(True, "lock re-acquired after release")
+
+
 # ── Test: cross-tier id ambiguity (no silent cross-tier delete) ──────────────
 
 def test_overwrite_by_name_skips_dedup_no_loss() -> None:
@@ -770,6 +792,9 @@ def main() -> None:
     test_save_overwrite_embed_failure_preserves_old()
     test_patch_reembed_flush_crash_preserves_memory()
     test_patch_reembed_happy_path_carries_metadata()
+
+    print("\n--- FileLock (concurrent-write protection) ---")
+    test_filelock_mutex()
 
     print("\n--- cross-tier id ambiguity (severe-bug fix) ---")
     test_forget_by_id_cross_tier_ambiguity()

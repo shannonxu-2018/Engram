@@ -404,7 +404,7 @@ class MemoryManager:
             "vector":      vec,
         }
         ids = coll.insert([row])
-        coll.flush()
+        tier.flush()
         new_id = int(ids[0])
 
         # Optional cheap neighborhood consolidation — only scans the row
@@ -754,10 +754,11 @@ class MemoryManager:
         for hit in targets:
             by_tier.setdefault(hit.tier, []).append(hit.id)
         for tname, ids in by_tier.items():
-            coll = self._tiers[tname].collection
+            t = self._tiers[tname]
+            coll = t.collection
             for mid in ids:
                 coll.delete(mid)
-            coll.flush()
+            t.flush()
         return len(targets)
 
     # ── Public API: patch ─────────────────────────────────────────────────
@@ -884,7 +885,7 @@ class MemoryManager:
             row["importance"] = new_importance
             row["type"]        = new_type  # safe: same tier
             row["accessed_at"] = now
-            coll.flush()
+            self._tiers[tier_name].flush()
             return self._row_to_hit(tier_name, mem_id, row)
 
         # ── 5. Re-embed path: insert the new row, *then* delete the old ──
@@ -914,12 +915,12 @@ class MemoryManager:
 
         coll.delete(mem_id)
 
-        # Flush each affected collection once.  Same-tier patch touches a
-        # single collection, so a lone flush persists both the insert and
-        # the delete atomically (one sidecar write).
-        target_coll.flush()
-        if coll is not target_coll:
-            coll.flush()
+        # Flush each affected tier once (under its write lock).  Same-tier
+        # patch touches one collection, so a lone flush persists both the
+        # insert and the delete atomically (one sidecar write).
+        self._tiers[new_tier_name].flush()
+        if new_tier_name != tier_name:
+            self._tiers[tier_name].flush()
 
         final_row = target_coll._rows[new_id]  # type: ignore[attr-defined]
         return self._row_to_hit(new_tier_name, new_id, final_row)

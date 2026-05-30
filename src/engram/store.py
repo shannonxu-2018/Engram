@@ -30,6 +30,8 @@ from pistadb import (
     load_collection,
 )
 
+from ._lock import FileLock
+
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 
@@ -149,31 +151,40 @@ class Tier:
         self.paths = paths
         self._dim = dim
         meta = str(paths.pst) + ".meta.json"
-        pst_exists  = Path(paths.pst).exists()
-        meta_exists = Path(meta).exists()
-        # PistaDB stores vectors in the .pst and schema/row metadata in a
-        # .meta.json sidecar.  They are written atomically together; if
-        # exactly one is present the store is corrupt and we must not
-        # silently create a fresh collection over the surviving file.
-        if pst_exists != meta_exists:
-            raise RuntimeError(
-                f"Inconsistent tier state for {paths.name}: "
-                f"{paths.pst}={'present' if pst_exists else 'missing'}, "
-                f"{meta}={'present' if meta_exists else 'missing'}. "
-                f"Restore the missing file from backup, or delete both to "
-                f"start fresh."
-            )
-        if meta_exists:
-            self._coll = load_collection(path=str(paths.pst))
-        else:
-            self._coll = create_collection(
-                name=paths.name,
-                fields=make_schema(dim),
-                description=f"Engram {paths.name} tier",
-                metric=Metric.COSINE,
-                index=Index.HNSW,
-                path=str(paths.pst),
-            )
+        # Open/create under the same write lock as flush(), so concurrent
+        # processes can't create the tier twice, and a peer's flush
+        # (os.replace on the sidecar) can't race our load here.
+        with FileLock(str(paths.pst) + ".lock"):
+            pst_exists  = Path(paths.pst).exists()
+            meta_exists = Path(meta).exists()
+            # PistaDB stores vectors in the .pst and schema/row metadata in
+            # a .meta.json sidecar.  They are written atomically together;
+            # if exactly one is present the store is corrupt and we must not
+            # silently create a fresh collection over the surviving file.
+            if pst_exists != meta_exists:
+                raise RuntimeError(
+                    f"Inconsistent tier state for {paths.name}: "
+                    f"{paths.pst}={'present' if pst_exists else 'missing'}, "
+                    f"{meta}={'present' if meta_exists else 'missing'}. "
+                    f"Restore the missing file from backup, or delete both to "
+                    f"start fresh."
+                )
+            if meta_exists:
+                self._coll = load_collection(path=str(paths.pst))
+            else:
+                self._coll = create_collection(
+                    name=paths.name,
+                    fields=make_schema(dim),
+                    description=f"Engram {paths.name} tier",
+                    metric=Metric.COSINE,
+                    index=Index.HNSW,
+                    path=str(paths.pst),
+                )
+                # create_collection writes only the sidecar; the .pst is
+                # otherwise materialised on first save.  Flush now — at the
+                # collection level (no extra lock; we already hold it) — so a
+                # peer never sees a meta-without-pst "inconsistent" state.
+                self._coll.flush()
 
     # ── Forwarding ─────────────────────────────────────────────────────────
 
@@ -185,8 +196,16 @@ class Tier:
     def count(self) -> int:
         return self._coll.num_entities
 
+    @property
+    def lock_path(self) -> str:
+        return str(self.paths.pst) + ".lock"
+
     def flush(self) -> None:
-        self._coll.flush()
+        # Serialise writes across processes (warm engram-mcp + CLI/scripts,
+        # or two agent sessions) so concurrent flushes can't physically
+        # corrupt the .pst / .meta.json.  See engram._lock.FileLock.
+        with FileLock(self.lock_path):
+            self._coll.flush()
 
     def close(self) -> None:
         self._coll.close()

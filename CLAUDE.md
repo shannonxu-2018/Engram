@@ -98,6 +98,19 @@ Idempotent (uses `--update` semantics).
   on first use) or set `ENGRAM_EMBEDDER=openai` with an API key.
 * **Native libs**: `src/pistadb/{pistadb.dll, libpistadb.so, libpistadb.dylib}`
   cover Win x64 / Linux x64 / macOS arm64. Intel Mac is unsupported.
+* **Concurrency**: `src/engram/_lock.py` (`FileLock`, zero-dep — `fcntl`
+  on POSIX / `msvcrt` on Windows) serialises **both** `Tier.__init__`
+  (create/load) **and** `Tier.flush()` on a `<pst>.lock` file.  This
+  eliminates physical corruption when the warm `engram-mcp` server, a CLI
+  invocation, and/or multiple agent sessions write the same tier
+  concurrently (verified: 30 concurrent writers, 0 corruption, store
+  always loadable).  `create_collection` only writes the sidecar, so
+  `Tier.__init__` flushes once right after creating to materialise the
+  `.pst` and avoid a meta-without-pst window.  **Known limit**: this does
+  not prevent a *lost update* (two long-lived processes each holding an
+  in-memory copy flush in turn — the later wins).  The MCP server is the
+  intended primary writer; fully eliminating lost updates needs a
+  reload-under-lock rewrite of the write path.
 
 ## v0.4 multi-agent layer (Claude Code / OpenCode / Codex)
 
