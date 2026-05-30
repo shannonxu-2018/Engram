@@ -19,13 +19,18 @@ Knobs (all environment-overridable):
 * ``ENGRAM_RANK_GAMMA``       — weight of ``log1p(hits)`` in the
   rerank composite.  Default ``0.02``.
 
-Reranking formula (lower = better, matches PistaDB cosine distance):
+Reranking (lower = better, matches PistaDB cosine distance):
 
     composite = distance  -  β · importance_effective(now)
                           -  γ · log1p(hits)
 
-so a frequently-accessed important memory wins ties against a
-distance-equivalent stale one, but a clearly closer vector always wins.
+This composite orders hits **only within a "protect band" of distance**
+(``ENGRAM_RANK_PROTECT_BAND``, default 0.03): a frequently-accessed
+important memory wins ties against a *near-equidistant* stale one, but a
+clearly closer vector always wins — importance/recency can never overturn
+a real distance gap.  (Earlier versions sorted globally by the composite,
+which in a narrow-distance band let a high-``hits`` old memory outrank the
+closest match.)
 """
 from __future__ import annotations
 
@@ -33,7 +38,7 @@ import math
 import os
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Sequence, Tuple
 
 if TYPE_CHECKING:
     from .memory import MemoryHit  # noqa: F401
@@ -66,6 +71,18 @@ def rank_beta() -> float:
 
 def rank_gamma() -> float:
     return _env_float("ENGRAM_RANK_GAMMA", 0.02)
+
+
+def rank_protect_band() -> float:
+    """Distance band within which rerank may reorder — a *tie-break* only.
+
+    Importance/recency can reorder hits whose cosine distance is within
+    this band of each other, but can never pull a clearly-closer hit below
+    a clearly-farther one.  Default ``0.03`` — wider than same-cluster
+    noise (~0.01) yet narrower than a genuine relevance gap, so the closest
+    vector is never demoted by a high ``hits`` / ``importance``.
+    """
+    return _env_float("ENGRAM_RANK_PROTECT_BAND", 0.03)
 
 
 # ── Effective importance (current decayed value) ─────────────────────────────
@@ -159,20 +176,33 @@ def composite_score(
 
 
 def rerank(hits: Sequence["MemoryHit"]) -> list["MemoryHit"]:
-    """Return ``hits`` sorted by :func:`composite_score` (ascending).
+    """Return ``hits`` reordered so importance/recency only *tie-breaks*
+    among near-equidistant hits — never overturning a real distance gap.
 
-    Does not mutate input.  ``MemoryHit.distance`` is left untouched —
-    the composite is purely for ordering.
+    Distance is the **primary** key, quantised into protect-band buckets
+    (:func:`rank_protect_band`); :func:`composite_score` orders only
+    *within* a bucket.  This guarantees the closest vector is never pushed
+    below a clearly-farther one by a high ``hits`` / ``importance`` — the
+    failure mode the old global composite-sort had in a narrow-distance
+    band.
+
+    Does not mutate input.  ``MemoryHit.distance`` is left untouched.
     """
     now = int(time.time())
     w = RerankWeights.from_env()
-    return sorted(
-        hits,
-        key=lambda h: composite_score(
+    band = rank_protect_band()
+
+    def _key(h: "MemoryHit") -> Tuple[int, float]:
+        # Bucket by distance first (so a closer bucket always wins), then
+        # let the composite reorder *within* the bucket.
+        bucket = int(float(h.distance) / band) if band > 0 else 0
+        comp = composite_score(
             h.distance, h.importance, h.accessed_at, h.hits,
             now=now, weights=w,
-        ),
-    )
+        )
+        return (bucket, comp)
+
+    return sorted(hits, key=_key)
 
 
 __all__ = [
@@ -184,4 +214,5 @@ __all__ = [
     "decay_tau_seconds",
     "rank_beta",
     "rank_gamma",
+    "rank_protect_band",
 ]

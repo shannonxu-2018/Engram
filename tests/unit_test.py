@@ -255,6 +255,69 @@ def test_directives_respects_budget() -> None:
                         f"tiny byte_budget still returns at least one (got {len(one)})")
 
 
+# ── Test: rerank protect band (closer hit never demoted) ─────────────────────
+
+def _mk_hit(name, distance, importance, hits, accessed_at):
+    from engram.memory import MemoryHit
+    return MemoryHit(
+        id=hash(name) & 0xFFFF, tier="local", type="project", name=name,
+        description="", distance=distance, importance=importance, hits=hits,
+        created_at=0, accessed_at=accessed_at,
+    )
+
+
+def test_rerank_distance_gap_protected() -> None:
+    """A clearly-closer hit must stay on top even when a far hit has huge
+    importance + hits — the failure mode the old global sort had."""
+    import time as _t
+    from engram.decay import rerank
+
+    now = int(_t.time())
+    near = _mk_hit("near", distance=0.10, importance=0.1, hits=0, accessed_at=now)
+    far  = _mk_hit("far",  distance=0.20, importance=1.0, hits=100, accessed_at=now)
+    out = rerank([far, near])
+    _assert(out[0].name == "near",
+            f"closest hit stays #1 despite far hit's importance/hits (got {out[0].name})")
+
+
+def test_rerank_tiebreak_within_band() -> None:
+    """Within the protect band, higher importance/hits wins the tie-break."""
+    import time as _t
+    from engram.decay import rerank
+
+    now = int(_t.time())
+    # distance差 0.005 << band 0.03 → 同桶 → importance 高的上浮
+    plain     = _mk_hit("plain",     distance=0.100, importance=0.0, hits=0,  accessed_at=now)
+    important = _mk_hit("important", distance=0.105, importance=1.0, hits=50, accessed_at=now)
+    out = rerank([plain, important])
+    _assert(out[0].name == "important",
+            f"within band, importance/hits wins the tie-break (got {out[0].name})")
+
+
+def test_rerank_band_zero_is_pure_distance() -> None:
+    """ENGRAM_RANK_PROTECT_BAND=0 collapses to a single bucket → pure composite
+    (back-compat escape hatch)."""
+    import os
+    import time as _t
+    from engram.decay import rerank
+
+    saved = os.environ.get("ENGRAM_RANK_PROTECT_BAND")
+    os.environ["ENGRAM_RANK_PROTECT_BAND"] = "0"
+    try:
+        now = int(_t.time())
+        near = _mk_hit("near", distance=0.10, importance=0.0, hits=0,   accessed_at=now)
+        far  = _mk_hit("far",  distance=0.20, importance=1.0, hits=100, accessed_at=now)
+        out = rerank([near, far])
+        # band=0 → one bucket → composite governs → far (huge pull) wins
+        _assert(out[0].name == "far",
+                f"band=0 restores global composite sort (got {out[0].name})")
+    finally:
+        if saved is None:
+            os.environ.pop("ENGRAM_RANK_PROTECT_BAND", None)
+        else:
+            os.environ["ENGRAM_RANK_PROTECT_BAND"] = saved
+
+
 # ── Test 1: H3 — OpenAIEmbedder ctor validation ──────────────────────────────
 
 def test_openai_ctor_validation() -> None:
@@ -617,6 +680,11 @@ def main() -> None:
 
     print("\n--- adaptive_k parameterised ---")
     test_adaptive_k()
+
+    print("\n--- rerank protect band (P0 fix) ---")
+    test_rerank_distance_gap_protected()
+    test_rerank_tiebreak_within_band()
+    test_rerank_band_zero_is_pure_distance()
 
     print("\n--- save/patch durability (data-loss windows) ---")
     test_save_overwrite_embed_failure_preserves_old()
