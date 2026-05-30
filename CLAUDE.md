@@ -120,10 +120,13 @@ Engram now ships with three integration profiles defined in
 * **Installer split**: agent-aware logic in `src/engram/install.py`;
   `src/engram/install_skill.py` is a back-compat shim that delegates
   to it.
-* **CLI** has seven top-level subcommands:
+* **CLI** has nine top-level subcommands:
   * `engram install --agent {claude-code,opencode,codex,openclaw,all}` —
     user-level skill + MCP install (the v0.3 `install-skill` is a
-    Claude-Code-skill-only alias and still works).
+    Claude-Code-skill-only alias and still works).  The per-turn
+    `UserPromptSubmit` hook is **opt-in / off by default**: pass `--hook`
+    to register it during install, or toggle it any time with `engram
+    hook` (below).
   * `engram init [--agent NAME] [--in PATH]` — *project-level* wiring:
     appends the instructions snippet to `CLAUDE.md` / `AGENTS.md`, adds
     `.claude/engram/` to `.gitignore`, creates the local-tier directory.
@@ -146,6 +149,18 @@ Engram now ships with three integration profiles defined in
     integrity).  Returns 0 / 1 / 2 based on the worst result.  Each
     failing check carries a copy-pasteable fix.  Implementation:
     `src/engram/doctor.py`.
+  * `engram directives [--json]` — print standing directives (pinned
+    memories) for injection.  This is the per-turn `UserPromptSubmit`
+    hook command; it loads no embedder, is robust (errors → exit 0, no
+    stdout), forces UTF-8 stdout (Windows hook pipes default to cp936),
+    and prints nothing when there are no directives.  Implementation:
+    `cli._cmd_directives` → `MemoryManager.directives()`.
+  * `engram hook [--agent NAME|all] [--disable]` — enable (default) or
+    disable the per-turn `UserPromptSubmit` directives hook for Claude
+    Code / Codex *without re-running install*.  Off by default.  Idempotent
+    JSON merge in `~/.claude/settings.json` / `[[hooks.UserPromptSubmit]]`
+    TOML in `~/.codex/config.toml`, preserving the user's own hooks.
+    Implementation: `install.hook` / `install.hook_all`.
   * `engram agents` — list known agents + their current home_dir
     (env-var-aware via `iter_profiles()`).
   * `engram version`.

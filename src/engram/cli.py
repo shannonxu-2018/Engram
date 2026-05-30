@@ -83,6 +83,13 @@ def _add_install_args(s: argparse.ArgumentParser, *, legacy_skill_only: bool) ->
             help="Skip MCP registration (file-skill-only — v0.3 behaviour).",
         )
         s.add_argument(
+            "--hook",
+            action="store_true",
+            help="Also register the per-turn UserPromptSubmit hook that "
+                 "injects standing directives (Claude Code & Codex). OFF by "
+                 "default; toggle later with `engram hook`.",
+        )
+        s.add_argument(
             "--print-instructions-snippet",
             dest="print_snippet",
             action="store_true",
@@ -258,6 +265,36 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     wu.set_defaults(func=_cmd_warmup)
 
+    # ── directives ──────────────────────────────────────────────────────
+    di = sub.add_parser(
+        "directives",
+        help="Print standing directives (pinned, always-on constraints). "
+             "Used as the per-turn UserPromptSubmit hook command.",
+    )
+    di.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Emit JSON instead of the injectable text block.",
+    )
+    di.set_defaults(func=_cmd_directives)
+
+    # ── hook ────────────────────────────────────────────────────────────
+    from .agents import list_agents as _la_for_hook
+    hk = sub.add_parser(
+        "hook",
+        help="Enable (default) or disable the per-turn UserPromptSubmit "
+             "directives hook for Claude Code / Codex.  Off by default.",
+    )
+    hk.add_argument(
+        "--agent", default="claude-code",
+        choices=_la_for_hook() + ["all"],
+        help="Target agent (default: claude-code).",
+    )
+    hk.add_argument(
+        "--disable", action="store_true",
+        help="Remove the hook instead of installing it.",
+    )
+    hk.set_defaults(func=_cmd_hook)
+
     # ── version ─────────────────────────────────────────────────────────
     v = sub.add_parser("version", help="Print the engram version and exit.")
     v.set_defaults(func=_cmd_version)
@@ -306,8 +343,10 @@ def _cmd_install(args: argparse.Namespace) -> int:
         return 2
     with_skill = None if not args.no_skill else False
     with_mcp   = None if not args.no_mcp   else False
+    # Hook is opt-in: only when --hook is passed.  None ⇒ install() leaves it off.
+    with_hook  = True if getattr(args, "hook", False) else None
     if agent == "all":
-        return _inst.install_all(dev=args.dev, force=args.force)
+        return _inst.install_all(dev=args.dev, force=args.force, with_hook=with_hook)
     return _inst.install(
         agent=agent,
         target=args.target,
@@ -315,6 +354,7 @@ def _cmd_install(args: argparse.Namespace) -> int:
         force=args.force,
         with_skill=with_skill,
         with_mcp=with_mcp,
+        with_hook=with_hook,
     )
 
 
@@ -417,6 +457,54 @@ def _cmd_warmup(args: argparse.Namespace) -> int:
         f"dim={result['dim']} elapsed={result['elapsed_seconds']}s"
     )
     return 0
+
+
+def _cmd_directives(args: argparse.Namespace) -> int:
+    """Print standing directives for injection.
+
+    This is the command wired into each agent's UserPromptSubmit hook, so it
+    runs on *every* turn.  It must be robust and quiet: on any error (bad
+    embedder config, missing store, …) it prints a short note to stderr and
+    exits 0 with no stdout — never block or pollute the turn.  Empty result =
+    no output, so nothing is injected when there are no directives.
+    """
+    # Hook pipes default to the OS code page on Windows (cp936/GBK), which
+    # mangles non-ASCII directive text.  Force UTF-8 so injected Chinese etc.
+    # round-trips intact.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    try:
+        from . import MemoryManager
+
+        with MemoryManager() as mgr:
+            rows = mgr.directives()
+    except Exception as e:  # never let the per-turn hook fail the turn
+        print(f"engram directives: {e}", file=sys.stderr)
+        return 0
+
+    if getattr(args, "as_json", False):
+        import json
+        print(json.dumps([h.to_dict() for h in rows], ensure_ascii=False, indent=2))
+        return 0
+
+    if not rows:
+        return 0  # nothing to inject
+    print("# Standing directives — always apply, regardless of the current task:")
+    for h in rows:
+        desc = h.description.replace("\n", " ").replace("\r", " ")
+        print(f"  - {desc}")
+    return 0
+
+
+def _cmd_hook(args: argparse.Namespace) -> int:
+    from . import install as _inst
+
+    enable = not args.disable
+    if args.agent == "all":
+        return _inst.hook_all(enable=enable)
+    return _inst.hook(agent=args.agent, enable=enable)
 
 
 def _cmd_version(_args: argparse.Namespace) -> int:

@@ -411,6 +411,169 @@ def test_codex_toml_preserves_other_sections() -> None:
                 "our section was added")
 
 
+# ── installer: UserPromptSubmit hook ─────────────────────────────────────────
+
+def test_claude_hook_merger_creates_and_idempotent() -> None:
+    """Registers our hook in settings.json; re-running doesn't duplicate it."""
+    from engram.install import _merge_claude_hook, _claude_hook_is_ours, HOOK_EVENT, HOOK_COMMAND
+
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "settings.json"
+        _merge_claude_hook(path)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        ups = data["hooks"][HOOK_EVENT]
+        _assert(len(ups) == 1 and _claude_hook_is_ours(ups[0]),
+                "engram UserPromptSubmit hook registered")
+        _assert(ups[0]["hooks"][0]["command"] == HOOK_COMMAND,
+                "hook command is 'engram directives'")
+        _merge_claude_hook(path)
+        data2 = json.loads(path.read_text(encoding="utf-8"))
+        ours = [g for g in data2["hooks"][HOOK_EVENT] if _claude_hook_is_ours(g)]
+        _assert(len(ours) == 1, "idempotent — exactly one engram hook entry")
+
+
+def test_claude_hook_merger_preserves_user_hooks() -> None:
+    """A user's own hooks + unrelated settings survive registration."""
+    from engram.install import _merge_claude_hook
+
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "settings.json"
+        path.write_text(json.dumps({
+            "model": "opus",
+            "hooks": {
+                "UserPromptSubmit": [
+                    {"hooks": [{"type": "command", "command": "my-own-thing"}]}
+                ],
+                "PreToolUse": [
+                    {"matcher": "Bash", "hooks": [{"type": "command", "command": "x"}]}
+                ],
+            },
+        }), encoding="utf-8")
+        _merge_claude_hook(path)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        _assert(data["model"] == "opus", "unrelated top-level setting preserved")
+        cmds = [h["command"] for g in data["hooks"]["UserPromptSubmit"] for h in g["hooks"]]
+        _assert("my-own-thing" in cmds, "user's own UserPromptSubmit hook preserved")
+        _assert(any("engram directives" in c for c in cmds), "engram hook added")
+        _assert("PreToolUse" in data["hooks"], "unrelated hook event preserved")
+
+
+def test_claude_hook_remove_leaves_user_hooks() -> None:
+    """remove drops only our entry; user hooks and the file survive."""
+    from engram.install import _merge_claude_hook, _remove_hook_registration
+    from engram.agents import get_profile
+
+    saved = os.environ.get("CLAUDE_HOME")
+    with tempfile.TemporaryDirectory() as td:
+        os.environ["CLAUDE_HOME"] = td
+        try:
+            prof = get_profile("claude-code")
+            path = prof.hook_config_path
+            path.write_text(json.dumps({"hooks": {"UserPromptSubmit": [
+                {"hooks": [{"type": "command", "command": "my-own-thing"}]}
+            ]}}), encoding="utf-8")
+            _merge_claude_hook(path)
+            _remove_hook_registration(prof)
+            data = json.loads(path.read_text(encoding="utf-8"))
+            cmds = [h["command"] for g in data["hooks"]["UserPromptSubmit"] for h in g["hooks"]]
+            _assert("my-own-thing" in cmds, "user hook survives remove")
+            _assert(not any("engram directives" in c for c in cmds),
+                    "engram hook removed")
+        finally:
+            if saved is None:
+                os.environ.pop("CLAUDE_HOME", None)
+            else:
+                os.environ["CLAUDE_HOME"] = saved
+
+
+def test_codex_hook_merger_and_strip() -> None:
+    """Codex TOML: append our block, idempotent, strip keeps user blocks + mcp."""
+    from engram.install import _merge_codex_hook, _strip_codex_hook
+
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "config.toml"
+        path.write_text(
+            '[mcp_servers.engram]\ncommand = "engram-mcp"\nargs = []\n\n'
+            '[[hooks.UserPromptSubmit]]\nhooks = [\n'
+            '  { type = "command", command = "user-thing" }\n]\n',
+            encoding="utf-8",
+        )
+        _merge_codex_hook(path)
+        text = path.read_text(encoding="utf-8")
+        _assert("[mcp_servers.engram]" in text, "mcp section preserved")
+        _assert("user-thing" in text, "user's own hook block preserved")
+        _assert(text.count("[[hooks.UserPromptSubmit]]") == 2,
+                "engram hook added as a second array-of-tables block")
+
+        _merge_codex_hook(path)   # idempotent
+        text2 = path.read_text(encoding="utf-8")
+        _assert(text2.count('args = ["directives"]') == 1,
+                "idempotent — exactly one engram hook block")
+        _assert("user-thing" in text2, "user hook still present after re-merge")
+
+        stripped = _strip_codex_hook(text2)
+        _assert("user-thing" in stripped, "strip keeps the user's hook block")
+        _assert("directives" not in stripped, "strip removes the engram hook block")
+        _assert("[mcp_servers.engram]" in stripped, "strip keeps the mcp section")
+
+
+def test_install_default_omits_hook() -> None:
+    """`install` no longer registers the hook by default — settings.json stays
+    absent unless --hook / `engram hook` is used."""
+    from engram import install as _inst
+    from engram.agents import get_profile
+
+    saved = {k: os.environ.get(k) for k in ("CLAUDE_HOME", "ENGRAM_HOME")}
+    with tempfile.TemporaryDirectory() as td:
+        os.environ["CLAUDE_HOME"] = td
+        os.environ["ENGRAM_HOME"] = td
+        try:
+            rc = _inst.install(agent="claude-code")   # defaults: skill+mcp, NO hook
+            prof = get_profile("claude-code")
+            _assert(rc == 0, f"install exits 0 (got {rc})")
+            _assert(prof.mcp_config_path.is_file(),
+                    "mcp config written (proves install actually ran)")
+            _assert(not prof.hook_config_path.is_file(),
+                    "settings.json NOT created — hook is off by default")
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+
+def test_hook_toggle_enable_disable() -> None:
+    """`engram hook` enables then disables the hook standalone."""
+    from engram import install as _inst
+    from engram.agents import get_profile
+
+    saved = os.environ.get("CLAUDE_HOME")
+    with tempfile.TemporaryDirectory() as td:
+        os.environ["CLAUDE_HOME"] = td
+        try:
+            prof = get_profile("claude-code")
+            _inst.hook("claude-code", enable=True)
+            data = json.loads(prof.hook_config_path.read_text(encoding="utf-8"))
+            cmds = [h["command"] for g in data["hooks"]["UserPromptSubmit"] for h in g["hooks"]]
+            _assert(any("engram directives" in c for c in cmds),
+                    "hook enabled by `engram hook`")
+            _inst.hook("claude-code", enable=False)
+            data2 = json.loads(prof.hook_config_path.read_text(encoding="utf-8"))
+            still = [
+                h["command"]
+                for g in data2.get("hooks", {}).get("UserPromptSubmit", [])
+                for h in g["hooks"]
+            ]
+            _assert(not any("engram directives" in c for c in still),
+                    "hook disabled by `engram hook --disable`")
+        finally:
+            if saved is None:
+                os.environ.pop("CLAUDE_HOME", None)
+            else:
+                os.environ["CLAUDE_HOME"] = saved
+
+
 # ── init_project (v0.4: engram init) ────────────────────────────────────────
 
 def test_init_writes_snippet_and_gitignore() -> None:
@@ -802,6 +965,14 @@ def main() -> None:
     test_codex_toml_merger()
     test_codex_toml_preserves_other_sections()
     test_codex_remove_single_pass()
+
+    print("\n--- installer: UserPromptSubmit hook ---")
+    test_claude_hook_merger_creates_and_idempotent()
+    test_claude_hook_merger_preserves_user_hooks()
+    test_claude_hook_remove_leaves_user_hooks()
+    test_codex_hook_merger_and_strip()
+    test_install_default_omits_hook()
+    test_hook_toggle_enable_disable()
 
     print("\n--- installer: atomic write ---")
     test_atomic_write_survives_partial_failure()

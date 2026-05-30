@@ -43,6 +43,18 @@ MCP_SERVER_NAME = "engram"
 MCP_COMMAND = "engram-mcp"
 MCP_ARGS: List[str] = []
 
+# ── UserPromptSubmit hook (per-turn standing-directive injection) ─────────────
+# The hook command runs `engram directives` on every user turn; its stdout is
+# injected as context so pinned, always-on constraints fire without relying on
+# the model remembering to read them.  Claude Code takes a single shell string;
+# Codex takes command + args.  HOOK_MARKER identifies *our* entry so re-install
+# and remove are idempotent and never touch a user's own hooks.
+HOOK_EVENT       = "UserPromptSubmit"
+HOOK_COMMAND     = "engram directives"   # Claude Code: single shell string
+HOOK_CODEX_CMD   = "engram"              # Codex: command + args form
+HOOK_CODEX_ARGS  = ["directives"]
+HOOK_MARKER      = "engram directives"   # substring that marks our hook entry
+
 
 # ── Snippet (kept for back-compat with v0.3's --print-global-snippet) ────────
 
@@ -329,6 +341,172 @@ def _install_mcp_registration(profile: AgentProfile) -> int:
     return 1
 
 
+# ── Per-step: UserPromptSubmit hook ──────────────────────────────────────────
+
+def _claude_hook_is_ours(group: object) -> bool:
+    """True if a Claude ``hooks.UserPromptSubmit`` matcher-group is the one we
+    installed (its command contains :data:`HOOK_MARKER`)."""
+    if not isinstance(group, dict):
+        return False
+    for h in (group.get("hooks") or []):
+        if isinstance(h, dict) and HOOK_MARKER in str(h.get("command", "")):
+            return True
+    return False
+
+
+def _merge_claude_hook(path: Path) -> None:
+    """Register our ``UserPromptSubmit`` hook in Claude Code's ``settings.json``.
+
+    Idempotent: drops any prior entry of ours before appending, so re-running
+    install never stacks duplicates.  Preserves the user's own hooks and any
+    unrelated top-level settings.  Atomic write.
+    """
+    data: Any = {}
+    if path.is_file():
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"  hook:  refusing to overwrite malformed JSON at {path}. "
+                f"Inspect/repair it manually, then re-run."
+            ) from e
+    if not isinstance(data, dict):
+        raise RuntimeError(
+            f"  hook:  {path} root is {type(data).__name__}, expected object; "
+            f"refusing to overwrite."
+        )
+    hooks = data.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise RuntimeError(f"  hook:  {path} has a non-object 'hooks' field; aborting.")
+    ups = hooks.setdefault(HOOK_EVENT, [])
+    if not isinstance(ups, list):
+        raise RuntimeError(
+            f"  hook:  {path} has a non-array 'hooks.{HOOK_EVENT}' field; aborting."
+        )
+    ups[:] = [g for g in ups if not _claude_hook_is_ours(g)]
+    ups.append({"hooks": [{"type": "command", "command": HOOK_COMMAND}]})
+    _atomic_write_text(path, json.dumps(data, indent=2) + "\n")
+
+
+def _strip_codex_hook(text: str) -> str:
+    """Return ``text`` with our ``[[hooks.UserPromptSubmit]]`` block removed.
+
+    Identifies *our* block by content (contains both ``engram`` and
+    ``directives``); leaves any user-authored UserPromptSubmit hooks intact.
+    A block runs from its ``[[hooks.UserPromptSubmit]]`` header to the next
+    line that starts a new ``[…]`` / ``[[…]]`` table, or EOF.
+    """
+    lines = text.splitlines()
+    out: List[str] = []
+    i, n = 0, len(lines)
+    while i < n:
+        if lines[i].strip().replace(" ", "") == "[[hooks.UserPromptSubmit]]":
+            j = i + 1
+            block = [lines[i]]
+            while j < n and not lines[j].lstrip().startswith("["):
+                block.append(lines[j])
+                j += 1
+            btext = "\n".join(block)
+            if "engram" in btext and "directives" in btext:
+                i = j               # drop our block
+                continue
+            out.extend(block)
+            i = j
+            continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out).rstrip()
+
+
+def _merge_codex_hook(path: Path) -> None:
+    """Register our ``UserPromptSubmit`` hook in Codex's ``config.toml``.
+
+    Strips any prior entry of ours, then appends a fresh
+    ``[[hooks.UserPromptSubmit]]`` array-of-tables block.  Shares the file with
+    the ``[mcp_servers.engram]`` registration; TOML table order is irrelevant
+    so we just append.  Atomic write.
+    """
+    existing = path.read_text(encoding="utf-8") if path.is_file() else ""
+    cleaned = _strip_codex_hook(existing)
+    args_repr = ", ".join(json.dumps(a) for a in HOOK_CODEX_ARGS)
+    block = (
+        "[[hooks.UserPromptSubmit]]\n"
+        "hooks = [\n"
+        f"  {{ type = \"command\", command = {json.dumps(HOOK_CODEX_CMD)}, "
+        f"args = [{args_repr}] }}\n"
+        "]\n"
+    )
+    sep = "\n\n" if cleaned else ""
+    _atomic_write_text(path, cleaned + sep + block)
+
+
+def _install_hook_registration(profile: AgentProfile) -> int:
+    if not profile.hook_config_kind:
+        print(f"  hook:  skipped (agent {profile.name!r} has no per-turn hook)")
+        return 0
+    path = profile.hook_config_path
+    if path is None:
+        print(f"  hook:  profile has no hook_config_file; nothing to register",
+              file=sys.stderr)
+        return 1
+    if profile.hook_config_kind == "claude_settings":
+        _merge_claude_hook(path)
+        print(f"  hook:  registered {HOOK_EVENT} -> '{HOOK_COMMAND}' in {path}")
+        return 0
+    if profile.hook_config_kind == "codex_toml":
+        _merge_codex_hook(path)
+        print(f"  hook:  registered {HOOK_EVENT} -> '{HOOK_COMMAND}' in {path}")
+        return 0
+    print(f"  hook:  unknown hook kind {profile.hook_config_kind!r}", file=sys.stderr)
+    return 1
+
+
+def _remove_hook_registration(profile: AgentProfile) -> int:
+    """Undo :func:`_install_hook_registration`.  Best-effort, idempotent."""
+    if not profile.hook_config_kind:
+        return 0
+    path = profile.hook_config_path
+    if path is None or not path.is_file():
+        return 0
+    if profile.hook_config_kind == "claude_settings":
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+        except json.JSONDecodeError:
+            print(f"warning: could not parse {path}; skipped", file=sys.stderr)
+            return 1
+        if not isinstance(data, dict):
+            return 0
+        hooks = data.get("hooks")
+        if not isinstance(hooks, dict):
+            return 0
+        ups = hooks.get(HOOK_EVENT)
+        if not isinstance(ups, list):
+            return 0
+        kept = [g for g in ups if not _claude_hook_is_ours(g)]
+        if kept == ups:
+            return 0                     # nothing of ours present
+        if kept:
+            hooks[HOOK_EVENT] = kept
+        else:
+            hooks.pop(HOOK_EVENT, None)   # drop the now-empty event key
+            if not hooks:
+                data.pop("hooks", None)   # drop the now-empty hooks object
+        _atomic_write_text(path, json.dumps(data, indent=2) + "\n")
+        print(f"unregistered {HOOK_EVENT} hook from {path}")
+        return 0
+    if profile.hook_config_kind == "codex_toml":
+        text = path.read_text(encoding="utf-8")
+        stripped = _strip_codex_hook(text)
+        if stripped.rstrip() != text.rstrip():
+            suffix = "\n" if stripped else ""
+            _atomic_write_text(path, stripped + suffix)
+            print(f"unregistered {HOOK_EVENT} hook from {path}")
+        return 0
+    return 0
+
+
 # ── Public entry points ──────────────────────────────────────────────────────
 
 def install(
@@ -338,15 +516,22 @@ def install(
     force: bool = False,
     with_mcp: Optional[bool] = None,
     with_skill: Optional[bool] = None,
+    with_hook: Optional[bool] = None,
 ) -> int:
     """Install Engram for ``agent``.
 
     ``with_skill`` / ``with_mcp`` default to "whatever the profile
-    supports".  Pass an explicit ``False`` to suppress one half.
+    supports"; pass an explicit ``False`` to suppress one part.
+
+    ``with_hook`` defaults to **off** — the per-turn ``UserPromptSubmit``
+    hook (Claude Code & Codex) is only registered when ``with_hook=True``
+    (``engram install --hook``), or toggled later via ``engram hook``.
     """
     profile = get_profile(agent)
     do_skill = "skill" in profile.install_kinds if with_skill is None else with_skill
     do_mcp   = "mcp"   in profile.install_kinds if with_mcp   is None else with_mcp
+    # Hook is opt-in: only installed when explicitly requested (with_hook=True).
+    do_hook  = bool(with_hook)
 
     print(f"installing engram for {profile.display} ({profile.name})")
     print(f"  home  : {profile.home_dir}")
@@ -356,6 +541,8 @@ def install(
         rc |= _install_skill_files(profile, target, dev, force)
     if do_mcp:
         rc |= _install_mcp_registration(profile)
+    if do_hook:
+        rc |= _install_hook_registration(profile)
 
     if rc == 0:
         print("OK")
@@ -363,6 +550,8 @@ def install(
             print(f"  verify skill: python \"{profile.skill_dir / 'scripts' / 'list.py'}\"")
         if do_mcp:
             print(f"  verify mcp  : engram-mcp --help")
+        if do_hook:
+            print(f"  verify hook : engram directives")
         print(
             f"  next: append the snippet to {profile.instructions_path} "
             f"with `engram install --agent {profile.name} --print-instructions-snippet`"
@@ -373,17 +562,19 @@ def install(
 def install_all(
     dev: bool = False,
     force: bool = False,
+    with_hook: Optional[bool] = None,
 ) -> int:
     """Install Engram for every built-in agent in turn.
 
     Each agent is best-effort: failures (e.g. an agent's home dir is on
     a filesystem we can't write to) propagate into the return code via
     bitwise OR, but don't stop the loop — so a single broken target
-    won't block the rest.
+    won't block the rest.  ``with_hook`` is forwarded to each
+    :func:`install` (agents without a hook profile silently skip it).
     """
     rc = 0
     for name in list_agents():
-        rc |= install(agent=name, dev=dev, force=force)
+        rc |= install(agent=name, dev=dev, force=force, with_hook=with_hook)
         print()
     return rc
 
@@ -435,6 +626,34 @@ def remove(agent: str = DEFAULT_AGENT, target: Optional[str] = None) -> int:
                     suffix = "\n" if stripped else ""
                     _atomic_write_text(path, stripped + suffix)
                     print(f"unregistered '{MCP_SERVER_NAME}' from {path}")
+
+    rc |= _remove_hook_registration(profile)
+    return rc
+
+
+def hook(agent: str = DEFAULT_AGENT, enable: bool = True) -> int:
+    """Enable or disable the per-turn ``UserPromptSubmit`` directives hook.
+
+    A standalone toggle so the hook can be turned on *when wanted* without
+    re-running the whole install (it is off by default).  No-op, with a
+    note, for agents that have no per-turn hook (OpenCode / OpenClaw).
+    """
+    profile = get_profile(agent)
+    if not profile.hook_config_kind:
+        print(f"{profile.display} ({profile.name}): no per-turn hook support (skipped)")
+        return 0
+    print(f"{'enabling' if enable else 'disabling'} directives hook for "
+          f"{profile.display} ({profile.name})")
+    if enable:
+        return _install_hook_registration(profile)
+    return _remove_hook_registration(profile)
+
+
+def hook_all(enable: bool = True) -> int:
+    """Toggle the hook for every agent that supports one."""
+    rc = 0
+    for name in list_agents():
+        rc |= hook(name, enable=enable)
     return rc
 
 
@@ -482,6 +701,31 @@ def check(agent: str = DEFAULT_AGENT, target: Optional[str] = None) -> int:
         print(f"mcp status     : {'REGISTERED' if registered else 'NOT REGISTERED'}")
         if not registered:
             rc = 1
+
+    if profile.hook_config_kind:
+        hpath = profile.hook_config_path
+        hook_on = False
+        if hpath is not None and hpath.is_file():
+            if profile.hook_config_kind == "claude_settings":
+                try:
+                    with hpath.open("r", encoding="utf-8") as f:
+                        hdata = json.load(f)
+                except json.JSONDecodeError:
+                    hdata = None
+                if isinstance(hdata, dict) and isinstance(hdata.get("hooks"), dict):
+                    ups = hdata["hooks"].get(HOOK_EVENT)
+                    if isinstance(ups, list):
+                        hook_on = any(_claude_hook_is_ours(g) for g in ups)
+            elif profile.hook_config_kind == "codex_toml":
+                htext = hpath.read_text(encoding="utf-8", errors="replace")
+                hook_on = (
+                    "[[hooks.UserPromptSubmit]]" in htext.replace(" ", "")
+                    and "directives" in htext
+                )
+        print(f"hook config    : {hpath}")
+        print(f"hook status    : {'REGISTERED' if hook_on else 'NOT REGISTERED'}")
+        if not hook_on:
+            rc = 1
     return rc
 
 
@@ -508,6 +752,8 @@ __all__ = [
     "install",
     "install_all",
     "remove",
+    "hook",
+    "hook_all",
     "check",
     "print_instructions_snippet",
 ]

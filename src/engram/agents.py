@@ -72,6 +72,15 @@ class AgentProfile:
     skill_dir: Optional[Path] = None
     mcp_config_file: Optional[str] = None
     mcp_config_kind: Optional[str] = None
+    # ── UserPromptSubmit hook (per-turn standing-directive injection) ──────
+    # Only agents with a real per-turn prompt hook get these; others fall back
+    # to the bootstrap snippet.  ``hook_config_kind`` selects the merger:
+    #   * ``"claude_settings"`` — JSON ``hooks.UserPromptSubmit[]`` in
+    #     ``~/.claude/settings.json``.
+    #   * ``"codex_toml"``      — ``[[hooks.UserPromptSubmit]]`` array-of-tables
+    #     in ``~/.codex/config.toml``.
+    hook_config_file: Optional[str] = None
+    hook_config_kind: Optional[str] = None
 
     # ── Derived paths ──────────────────────────────────────────────────────
 
@@ -84,6 +93,12 @@ class AgentProfile:
         if not self.mcp_config_file:
             return None
         return self.home_dir / self.mcp_config_file
+
+    @property
+    def hook_config_path(self) -> Optional[Path]:
+        if not self.hook_config_file:
+            return None
+        return self.home_dir / self.hook_config_file
 
     # ── Snippets the installer renders ────────────────────────────────────
 
@@ -284,6 +299,9 @@ def _build_profiles() -> Dict[str, AgentProfile]:
             skill_dir=claude_home / "skills" / "engram",
             mcp_config_file=".claude.json",
             mcp_config_kind="claude_servers",
+            # Hooks live in settings.json, NOT the .claude.json MCP registry.
+            hook_config_file="settings.json",
+            hook_config_kind="claude_settings",
         ),
         "opencode": AgentProfile(
             name="opencode",
@@ -315,6 +333,9 @@ def _build_profiles() -> Dict[str, AgentProfile]:
             skill_dir=_agents_skills_home() / "engram",
             mcp_config_file="config.toml",
             mcp_config_kind="codex_toml",
+            # Codex hooks share config.toml with the MCP registry.
+            hook_config_file="config.toml",
+            hook_config_kind="codex_toml",
         ),
         "openclaw": AgentProfile(
             name="openclaw",
