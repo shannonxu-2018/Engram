@@ -18,6 +18,19 @@ your context until you actively recall.  Saves tokens.  Improves precision
 
 ## TL;DR for the model
 
+**IMPORTANT — at the START of every turn, before anything else:** run
+`directives.py` and obey the lines it returns. These are *standing
+directives* — always-on global constraints (e.g. response language, coding
+conventions) that apply no matter what the current task is. They are the
+CLAUDE.md replacement. Semantic `recall` will **not** surface them (your
+query is about the task, not about the rule), so this per-turn step is the
+only thing that makes them fire reliably. It's cheap — no embedding, just
+the pinned rows.
+
+```bash
+python .claude/skills/engram/scripts/directives.py
+```
+
 Replace these old behaviours:
 
 | Old (MD system)                           | New (Engram)                                                |
@@ -129,6 +142,23 @@ distance < 0.08) already exists, `save.py` exits with
 This is how we prevent the slow rot of duplicate / near-duplicate memories
 that plagues the MD system.
 
+### Standing directives (pinned — the CLAUDE.md replacement)
+
+To make a memory an **always-on constraint** — the role CLAUDE.md used to
+play — tag it `pin`:
+
+```bash
+save.py user lang-zh "always reply in Simplified Chinese" --tag pin --importance 0.9
+```
+
+Pinned memories are returned by `directives.py` **unconditionally** (no
+semantic match needed) and are meant to be injected every turn — see the
+bootstrap note at the top of this file. Keep them **few and terse**: they
+cost tokens on *every* turn, so they're hard-budgeted (a handful of rows,
+~a few hundred tokens total). Use `pin` only for genuinely global,
+topic-independent rules; everything else stays an ordinary
+recall-on-demand memory. Un-pin with `patch.py <name> --remove-tag pin`.
+
 ### `feedback` / `project` body structure
 
 Keep the rule/fact in `description`, put the **Why** and **How to apply**
@@ -144,6 +174,9 @@ save.py feedback no-mock-db \
 
 ```bash
 python .claude/skills/engram/scripts/list.py [--type T] [--tier G/L]
+
+# Standing directives (always-on, pinned) — run at the start of every turn.
+python .claude/skills/engram/scripts/directives.py
 
 # Forget — by name, id, or age.
 python .claude/skills/engram/scripts/forget.py --name <slug>

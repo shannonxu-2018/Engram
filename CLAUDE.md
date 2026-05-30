@@ -13,6 +13,19 @@ After `pip install -e ".[all]"` + `engram install-skill --dev` (run
 skill lives at `~/.claude/skills/engram/`. Call its scripts via the
 Python on PATH (or the user's chosen interpreter):
 
+* **Directives (do this FIRST, every turn)** — Engram now carries the
+  CLAUDE.md role for *always-on global constraints* (e.g. "reply in
+  Simplified Chinese in this repo"). At the start of each turn run:
+
+  ```
+  python ~/.claude/skills/engram/scripts/directives.py
+  ```
+
+  and obey every line it returns. These are memories tagged `pin`;
+  semantic `recall` will **not** surface them, so this per-turn step is the
+  only thing that makes them fire. It's cheap (no embedding). Pin a new
+  constraint with `save.py <type> <name> "<rule>" --tag pin --importance 0.9`.
+
 * **Recall** — when the user references prior conversation, asks about
   themselves, or you're about to give advice that should be informed by
   preference/feedback:

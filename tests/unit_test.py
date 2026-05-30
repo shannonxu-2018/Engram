@@ -203,6 +203,58 @@ def test_patch_reembed_happy_path_carries_metadata() -> None:
                         "exactly one 'baz' remains after re-embed (old gone)")
 
 
+# ── Test: directives() — standing always-on constraints ──────────────────────
+
+def test_directives_returns_only_pinned_readonly() -> None:
+    """`directives()` returns only `pin`-tagged memories, importance-sorted,
+    and is read-only (no hits/accessed_at bump)."""
+    from engram import MemoryManager
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        with _engram_home(root):
+            with MemoryManager(embedder=_StubEmbedder(), project_root=root) as mgr:
+                mgr.save("user", "lang-zh", "always reply in Simplified Chinese",
+                         tags=["pin"], importance=0.9, force=True)
+                mgr.save("feedback", "tabs", "use tabs not spaces",
+                         tags=["pin"], importance=0.5, force=True)
+                mgr.save("project", "ordinary", "an ordinary non-pinned memory",
+                         force=True)
+
+                ds = mgr.directives()
+                names = [h.name for h in ds]
+                _assert("lang-zh" in names and "tabs" in names,
+                        "both pinned memories returned")
+                _assert("ordinary" not in names,
+                        "non-pinned memory is excluded")
+                _assert(names[0] == "lang-zh",
+                        f"sorted by importance desc (got {names})")
+
+                after = [h for h in mgr.list() if h.name == "lang-zh"][0]
+                _assert(after.hits == 0,
+                        "directives() is read-only — does not bump hits")
+
+
+def test_directives_respects_budget() -> None:
+    """`max_items` / `byte_budget` cap the per-turn cost; at least one is
+    always returned."""
+    from engram import MemoryManager
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        with _engram_home(root):
+            with MemoryManager(embedder=_StubEmbedder(), project_root=root) as mgr:
+                for i in range(5):
+                    mgr.save("user", f"rule-{i}", f"rule number {i}",
+                             tags=["pin"], importance=0.5, force=True)
+                capped = mgr.directives(max_items=2)
+                _assert(len(capped) == 2,
+                        f"max_items caps the count (got {len(capped)})")
+                one = mgr.directives(byte_budget=1)
+                _assert(len(one) == 1,
+                        f"tiny byte_budget still returns at least one (got {len(one)})")
+
+
 # ── Test 1: H3 — OpenAIEmbedder ctor validation ──────────────────────────────
 
 def test_openai_ctor_validation() -> None:
@@ -570,6 +622,10 @@ def main() -> None:
     test_save_overwrite_embed_failure_preserves_old()
     test_patch_reembed_flush_crash_preserves_memory()
     test_patch_reembed_happy_path_carries_metadata()
+
+    print("\n--- directives (standing always-on constraints) ---")
+    test_directives_returns_only_pinned_readonly()
+    test_directives_respects_budget()
 
     print("\nALL UNIT TESTS PASSED.")
 

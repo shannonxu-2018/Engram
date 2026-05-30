@@ -45,6 +45,18 @@ VALID_TYPES = GLOBAL_TYPES | LOCAL_TYPES
 # 0.08 ≈ cosine sim > 0.92, empirically a tight match for e5.
 DEDUP_THRESHOLD = 0.08
 
+# ── Standing directives ("always-on" constraints) ────────────────────────────
+# A memory tagged PIN_TAG is a *standing directive*: a CLAUDE.md-style global
+# constraint that must apply on every turn regardless of the current topic
+# (e.g. "always reply in Simplified Chinese").  Unlike ordinary memories it is
+# NOT retrieved by semantic recall — `directives()` pulls every pinned memory
+# unconditionally.  Because that cost is paid on *every* turn, it is hard-
+# budgeted (see SKILL.md §4 token discipline): keep pinned memories few and
+# terse, or this degrades into another bloated MEMORY.md.
+PIN_TAG               = "pin"
+DIRECTIVES_MAX        = 8       # never inject more than this many directives
+DIRECTIVES_BYTE_BUDGET = 1200   # total description bytes ≈ a few hundred tokens
+
 # Cap returned content snippet so descriptions stay token-cheap.
 DESCRIPTION_MAX_BYTES = 480     # leaves headroom under VARCHAR 512
 CONTENT_MAX_BYTES     = 8000    # leaves headroom under VARCHAR 8192
@@ -950,6 +962,55 @@ class MemoryManager:
         out.sort(key=lambda h: h.created_at, reverse=True)
         return out[:limit]
 
+    # ── Public API: directives (standing, always-on constraints) ───────────
+
+    def directives(
+        self,
+        max_items: int = DIRECTIVES_MAX,
+        byte_budget: int = DIRECTIVES_BYTE_BUDGET,
+    ) -> List[MemoryHit]:
+        """Return every *standing directive* — memories tagged :data:`PIN_TAG`.
+
+        This is Engram's equivalent of a CLAUDE.md "global, always-on
+        constraint".  Unlike :meth:`recall` it does **no** vector search and
+        **no** similarity filtering — it pulls every pinned memory directly
+        from the in-memory ``_rows`` (O(n), zero embedding cost), so a
+        per-turn bootstrap can inject it unconditionally.
+
+        Two deliberate properties:
+
+        * **Read-only** — does not bump ``hits`` / ``accessed_at``.  These are
+          read on every turn; bumping would pin importance to 1.0 and pollute
+          the access stats.
+        * **Hard-budgeted** — capped by both ``max_items`` and a total
+          ``byte_budget`` over descriptions, sorted by ``importance`` (desc).
+          Standing directives cost tokens on every turn, so the budget keeps
+          them from silently re-growing into a bloated MEMORY.md.  At least
+          one directive is always returned even if it alone exceeds the
+          budget.
+        """
+        collected: List[MemoryHit] = []
+        for tname, t in self._tiers.items():
+            for mem_id, row in t.collection._rows.items():  # type: ignore[attr-defined]
+                if PIN_TAG in (row.get("tags") or []):
+                    collected.append(self._row_to_hit(tname, mem_id, row))
+
+        # Highest importance first; ties broken by oldest-then-lowest-id so the
+        # order is stable across turns.
+        collected.sort(key=lambda h: (-h.importance, h.created_at, h.id))
+
+        out: List[MemoryHit] = []
+        used = 0
+        for h in collected:
+            if len(out) >= max_items:
+                break
+            cost = len(h.description.encode("utf-8"))
+            if out and used + cost > byte_budget:
+                break
+            out.append(h)
+            used += cost
+        return out
+
     # ── Internal helpers ──────────────────────────────────────────────────
 
     def _closest(
@@ -1054,4 +1115,7 @@ __all__ = [
     "CONTENT_MAX_BYTES",
     "DESCRIPTION_MAX_BYTES",
     "VALID_TYPES",
+    "PIN_TAG",
+    "DIRECTIVES_MAX",
+    "DIRECTIVES_BYTE_BUDGET",
 ]

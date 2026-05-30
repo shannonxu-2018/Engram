@@ -137,6 +137,14 @@ def _tool_patch(mgr: MemoryManager, args: Dict[str, Any]) -> Dict[str, Any]:
     return hit.to_dict()
 
 
+def _tool_directives(mgr: MemoryManager, args: Dict[str, Any]) -> Dict[str, Any]:
+    # No vector search — returns every pinned "standing directive"
+    # unconditionally.  Meant to be called once at the start of a turn so
+    # always-on constraints (e.g. response language) are never missed.
+    hits = mgr.directives()
+    return {"directives": [h.to_dict() for h in hits]}
+
+
 def _tool_related(mgr: MemoryManager, args: Dict[str, Any]) -> Dict[str, Any]:
     # ``args.get("name") or args.get("id")`` would silently treat ``id=0`` as
     # missing.  PistaDB currently allocates auto-ids from 1, but we don't
@@ -286,6 +294,18 @@ TOOLS: List[Dict[str, Any]] = [
         },
     },
     {
+        "name": "engram_directives",
+        "description": (
+            "Return all STANDING DIRECTIVES — memories tagged 'pin' — i.e. "
+            "always-on global constraints (e.g. response language, coding "
+            "conventions). No semantic search: every pinned memory is "
+            "returned unconditionally. Call this at the start of a turn and "
+            "obey the results regardless of the current topic. Create one "
+            "with engram_save(..., tags=['pin'])."
+        ),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
         "name": "engram_related",
         "description": "BFS walk over [[name]] tag edges from a seed memory.",
         "inputSchema": {
@@ -308,6 +328,7 @@ TOOL_DISPATCH: Dict[str, Callable[[MemoryManager, Dict[str, Any]], Dict[str, Any
     "engram_list":    _tool_list,
     "engram_forget":  _tool_forget,
     "engram_patch":   _tool_patch,
+    "engram_directives": _tool_directives,
     "engram_related": _tool_related,
 }
 

@@ -138,6 +138,11 @@ I have Engram (vector-DB memory traces) installed as a {agent} skill at
 `{skill_dir}`. It replaces the legacy `MEMORY.md` / per-file markdown
 memory.
 
+* **At the start of every turn**, run
+  `python {skill_dir}/scripts/directives.py` and obey the standing
+  directives it returns — always-on global constraints (e.g. response
+  language) that semantic recall won't surface. This is cheap (no
+  embedding) and is what replaces CLAUDE.md for global rules.
 * **Never** write per-file markdown memory anywhere. The vector store
   is the source of truth.
 * **Never** read `MEMORY.md` for context. Use the skill scripts.
@@ -147,6 +152,7 @@ memory types) is at `{skill_dir}/SKILL.md`.
 
 ## Quick reference
 
+* **Directives**: `python {skill_dir}/scripts/directives.py`  (standing always-on constraints; create one with `save.py ... --tag pin`)
 * **Recall**: `python {skill_dir}/scripts/recall.py "<query>" --k 5`
 * **Save**:   `python {skill_dir}/scripts/save.py <type> <name> "<desc>" "<content>"`
 * **Expand**: `python {skill_dir}/scripts/expand.py <id>`
@@ -188,9 +194,15 @@ have read a `MEMORY.md` index or written a per-file markdown memory.
   are carried over).  Pick either `tags` (replace) **or** `add_tags`/
   `remove_tags` (delta) — not both.
 * `engram_related(name, depth?)` — walk `[[name]]` tag edges.
+* `engram_directives()` — return all **standing directives** (memories
+  tagged `pin`): always-on global constraints. No semantic search — every
+  pinned memory is returned. Create one with `engram_save(..., tags=["pin"])`.
 
 ## When to use
 
+* **At the start of every turn**, call `engram_directives()` and obey the
+  results — always-on global constraints (e.g. response language) that
+  semantic recall won't surface. This is the CLAUDE.md replacement.
 * **Recall** when the user references prior conversation, asks about
   themselves, or you're about to give advice that should be informed by
   their preferences/feedback.
