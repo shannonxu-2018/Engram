@@ -386,7 +386,9 @@ def _patch_and_forget_checks(fake_project) -> None:
 
             # ── 6. patch: tags vs add_tags conflict raises ──────────────
             try:
-                mgr.patch(hit5.id, tags=["a"], add_tags=["b"])
+                # pass the hit (carries its tier) — a bare id can be ambiguous
+                # across tiers, which would raise a *different* error first.
+                mgr.patch(hit5, tags=["a"], add_tags=["b"])
             except ValueError as e:
                 _assert("not both" in str(e).lower() or "tags=" in str(e),
                         f"tags + add_tags raises informative error ({e})")

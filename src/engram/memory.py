@@ -375,7 +375,11 @@ class MemoryManager:
                 actually_overwrote = True
 
         # ── Pattern separation: dedup check ───────────────────────────────
-        if not force:
+        # Skip when overwrite_by_name is set: there the user treats `name` as
+        # the identity ("update this memory"), so a vector near-duplicate
+        # check is wrong — and worse, returning merge_suggestion *after* we
+        # already deleted the same-name row above would lose that memory.
+        if not force and not overwrite_by_name:
             dup = self._closest(vec, tier_name=tier_name)
             if dup is not None and dup.distance < DEDUP_THRESHOLD:
                 return SaveResult(
@@ -695,6 +699,17 @@ class MemoryManager:
         if older_than_days is not None:
             cutoff_ts = int(time.time() - float(older_than_days) * 86400)
 
+        # A bare id is ambiguous when it exists in both tiers (independent
+        # auto-id counters).  Refuse to match across tiers — otherwise
+        # forget(id=N) would silently delete TWO unrelated memories.
+        if id is not None and tier is None:
+            holding = self._tiers_with_id(id)
+            if len(holding) > 1:
+                raise ValueError(
+                    f"id={id} exists in multiple tiers ({', '.join(holding)}); "
+                    f"pass tier= to disambiguate (refusing to delete across tiers)."
+                )
+
         matches: List[MemoryHit] = []
         for tname, t in self._tiers.items():
             if tier is not None and tname != tier:
@@ -759,6 +774,7 @@ class MemoryManager:
         importance: Optional[float] = None,
         type: Optional[str] = None,
         name: Optional[str] = None,
+        tier: Optional[str] = None,
     ) -> MemoryHit:
         """Modify selected fields of one existing memory.
 
@@ -788,7 +804,13 @@ class MemoryManager:
         re-embed was required).
         """
         # ── 1. Locate the row ────────────────────────────────────────────
-        mem_id, tier_name = self._resolve_seed(target)
+        if isinstance(target, int) and tier is not None:
+            # Explicit tier disambiguates a bare id present in both tiers.
+            mem_id, tier_name = target, tier
+            if mem_id not in self._tiers[tier_name].collection._rows:  # type: ignore[attr-defined]
+                raise ValueError(f"patch: id={mem_id} not found in tier {tier_name!r}")
+        else:
+            mem_id, tier_name = self._resolve_seed(target)
         if mem_id is None or tier_name is None:
             raise ValueError(f"patch: target {target!r} not found")
         # Disambiguation for ``target=str``: ``_resolve_seed`` already
@@ -1041,11 +1063,35 @@ class MemoryManager:
             accessed_at = 0,
         )
 
+    def _tiers_with_id(self, mem_id: int) -> List[str]:
+        """Tier names whose collection currently holds ``mem_id``.
+
+        The two tiers are independent PistaDB collections with their own
+        auto-id counters, so the same id can exist in BOTH (e.g. global #2
+        and local #2).  Any API that takes a bare id must disambiguate.
+        """
+        return [
+            tname for tname, t in self._tiers.items()
+            if mem_id in t.collection._rows  # type: ignore[attr-defined]
+        ]
+
     def _find_tier_of(self, mem_id: int) -> Optional[str]:
-        for tname, t in self._tiers.items():
-            if mem_id in t.collection._rows:  # type: ignore[attr-defined]
-                return tname
-        return None
+        """Return the single tier holding ``mem_id``.
+
+        ``None`` if absent.  Raises ``ValueError`` if the id exists in
+        *both* tiers — a bare id is then ambiguous and the caller must pass
+        an explicit tier, otherwise we'd silently pick one and operate on
+        the wrong memory.
+        """
+        found = self._tiers_with_id(mem_id)
+        if not found:
+            return None
+        if len(found) > 1:
+            raise ValueError(
+                f"id={mem_id} exists in multiple tiers ({', '.join(found)}); "
+                f"pass tier= to disambiguate."
+            )
+        return found[0]
 
     def _find_by_name(
         self, tier_name: str, type: str, name: str

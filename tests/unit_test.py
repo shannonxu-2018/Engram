@@ -203,6 +203,73 @@ def test_patch_reembed_happy_path_carries_metadata() -> None:
                         "exactly one 'baz' remains after re-embed (old gone)")
 
 
+# ── Test: cross-tier id ambiguity (no silent cross-tier delete) ──────────────
+
+def test_overwrite_by_name_skips_dedup_no_loss() -> None:
+    """overwrite_by_name must skip the vector dedup check — otherwise a
+    near-duplicate elsewhere triggers merge_suggestion *after* the same-name
+    row was already deleted, losing it."""
+    import numpy as np
+    from engram import MemoryManager
+
+    class _FixedVec:
+        dim = 8
+        def _v(self, text):
+            v = np.zeros(self.dim, dtype="float32")
+            v[0 if "dup" in text else 1] = 1.0
+            return v
+        def embed(self, text, *, kind="passage"):
+            return self._v(text)
+        def embed_batch(self, texts, *, kind="passage"):
+            return np.stack([self._v(t) for t in texts])
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        with _engram_home(root):
+            with MemoryManager(embedder=_FixedVec(), project_root=root) as mgr:
+                mgr.save("user", "decoy", "dup decoy", force=True)        # vec A
+                mgr.save("user", "keep", "plain old body", force=True)    # vec B
+                # update 'keep' with a "dup" text → vec A, colliding with decoy
+                res = mgr.save("user", "keep", "dup new body", overwrite_by_name=True)
+                _assert(res.status == "overwritten",
+                        f"overwrite_by_name skips dedup (got {res.status!r})")
+                names = {h.name for h in mgr.list()}
+                _assert("keep" in names, "'keep' survived the overwrite (no data loss)")
+                _assert("decoy" in names, "decoy untouched")
+
+
+def test_forget_by_id_cross_tier_ambiguity() -> None:
+    """The two tiers have independent auto-ids, so the same id can live in
+    both.  A bare id must raise (not delete/expand across tiers)."""
+    from engram import MemoryManager
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        with _engram_home(root):
+            with MemoryManager(embedder=_StubEmbedder(), project_root=root) as mgr:
+                mgr.save("user", "u1", "global one", force=True)     # global id=1
+                mgr.save("project", "p1", "local one", force=True)   # local  id=1
+                _assert(set(mgr._tiers_with_id(1)) == {"global", "local"},
+                        "id=1 exists in BOTH tiers (independent auto-ids)")
+
+                _expect_raises(ValueError, lambda: mgr.find_for_forget(id=1),
+                               "bare ambiguous id raises instead of matching both")
+                _expect_raises(ValueError, lambda: mgr.forget(id=1),
+                               "forget(bare ambiguous id) refuses cross-tier delete")
+                _expect_raises(ValueError, lambda: mgr.expand(1),
+                               "expand(bare ambiguous id) raises")
+
+                got = mgr.find_for_forget(id=1, tier="global")
+                _assert(len(got) == 1 and got[0].tier == "global",
+                        "tier= disambiguates the lookup")
+
+                n = mgr.forget(id=1, tier="local")
+                _assert(n == 1, "forget id=1 tier=local deletes exactly one")
+                names = {h.name for h in mgr.list()}
+                _assert("u1" in names and "p1" not in names,
+                        "only the local memory was deleted; global survives")
+
+
 # ── Test: directives() — standing always-on constraints ──────────────────────
 
 def test_directives_returns_only_pinned_readonly() -> None:
@@ -703,6 +770,12 @@ def main() -> None:
     test_save_overwrite_embed_failure_preserves_old()
     test_patch_reembed_flush_crash_preserves_memory()
     test_patch_reembed_happy_path_carries_metadata()
+
+    print("\n--- cross-tier id ambiguity (severe-bug fix) ---")
+    test_forget_by_id_cross_tier_ambiguity()
+
+    print("\n--- overwrite_by_name skips dedup (severe-bug fix) ---")
+    test_overwrite_by_name_skips_dedup_no_loss()
 
     print("\n--- directives (standing always-on constraints) ---")
     test_directives_returns_only_pinned_readonly()

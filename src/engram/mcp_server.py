@@ -81,7 +81,8 @@ def _tool_save(mgr: MemoryManager, args: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _tool_expand(mgr: MemoryManager, args: Dict[str, Any]) -> Dict[str, Any]:
-    hit = mgr.expand(int(args["id"]))
+    # tier disambiguates when the same id exists in both tiers.
+    hit = mgr.expand(int(args["id"]), tier=args.get("tier"))
     return hit.to_dict()
 
 
@@ -133,6 +134,7 @@ def _tool_patch(mgr: MemoryManager, args: Dict[str, Any]) -> Dict[str, Any]:
         ),
         type=args.get("type"),
         name=args.get("name"),
+        tier=args.get("tier"),
     )
     return hit.to_dict()
 
@@ -215,10 +217,17 @@ TOOLS: List[Dict[str, Any]] = [
     },
     {
         "name": "engram_expand",
-        "description": "Fetch full content for one memory id.  Bumps hits++/accessed_at.",
+        "description": (
+            "Fetch full content for one memory id.  Bumps hits++/accessed_at. "
+            "Pass tier (global|local) to disambiguate when the same id exists "
+            "in both tiers."
+        ),
         "inputSchema": {
             "type": "object",
-            "properties": {"id": {"type": "integer"}},
+            "properties": {
+                "id": {"type": "integer"},
+                "tier": {"type": "string", "enum": ["global", "local"]},
+            },
             "required": ["id"],
         },
     },
@@ -289,6 +298,8 @@ TOOLS: List[Dict[str, Any]] = [
                 "importance": {"type": "number", "minimum": 0.0, "maximum": 1.0},
                 "type": {"type": "string", "enum": ["user", "feedback", "project", "reference"]},
                 "name": {"type": "string"},
+                "tier": {"type": "string", "enum": ["global", "local"],
+                         "description": "Disambiguate a bare id that exists in both tiers."},
             },
             "required": ["target"],
         },
