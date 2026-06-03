@@ -310,6 +310,18 @@ class LocalE5Embedder:
         # the elapsed-time hint at the end lets users calibrate.
         import time
         _hf_cache_miss = self._looks_like_first_run()
+        # When the model is already in the HF cache, resolve it *offline* so
+        # huggingface_hub doesn't burn a network round-trip checking the Hub
+        # for a newer revision on every cold start.  Measured on a warm
+        # cache: ~24s online (the Hub revision check) vs ~12s offline for
+        # the exact same files — i.e. roughly half the cold-start cost is a
+        # pointless network call.  A genuine first run (cache miss) still
+        # goes online to download; and if an "offline" load fails because
+        # the cached snapshot is partial/corrupt, we retry once with the
+        # network (see _load_offline_first).  ``local_files_only`` is scoped
+        # to this single load, so unlike setting HF_HUB_OFFLINE we don't
+        # mutate global state for the rest of the process.
+        offline = not _hf_cache_miss
         t0 = time.time()
         if _hf_cache_miss:
             print(
@@ -320,7 +332,7 @@ class LocalE5Embedder:
             )
         else:
             print(
-                f"engram: loading {self._model_path} from cache ...",
+                f"engram: loading {self._model_path} from cache (offline) ...",
                 file=sys.stderr,
                 flush=True,
             )
@@ -328,7 +340,13 @@ class LocalE5Embedder:
         # Preferred: sentence-transformers handles pool + L2 norm.
         try:
             from sentence_transformers import SentenceTransformer  # type: ignore
-            self._model = SentenceTransformer(self._model_path, device=self._device)
+            self._model = self._load_offline_first(
+                lambda lfo: SentenceTransformer(
+                    self._model_path, device=self._device, local_files_only=lfo
+                ),
+                offline,
+                what="model",
+            )
             self._backend = "st"
             print(
                 f"engram: loaded in {time.time() - t0:.1f}s",
@@ -360,8 +378,20 @@ class LocalE5Embedder:
                 "  pip install sentence-transformers\n"
                 "or pick another backend (OpenAIEmbedder, HTTPEmbedder)."
             ) from e
-        self._tok = AutoTokenizer.from_pretrained(self._model_path)
-        self._model = AutoModel.from_pretrained(self._model_path).to(self._device)
+        self._tok = self._load_offline_first(
+            lambda lfo: AutoTokenizer.from_pretrained(
+                self._model_path, local_files_only=lfo
+            ),
+            offline,
+            what="tokenizer",
+        )
+        self._model = self._load_offline_first(
+            lambda lfo: AutoModel.from_pretrained(
+                self._model_path, local_files_only=lfo
+            ),
+            offline,
+            what="weights",
+        ).to(self._device)
         self._model.eval()
         self._torch = torch
         self._backend = "hf"
@@ -387,6 +417,31 @@ class LocalE5Embedder:
             or str(Path.home() / ".cache" / "huggingface")
         )
         return not (Path(hf_home) / "hub" / "models--intfloat--multilingual-e5-small").is_dir()
+
+    @staticmethod
+    def _load_offline_first(loader, offline: bool, *, what: str):
+        """Run ``loader(local_files_only)`` offline-first.
+
+        ``loader`` takes a single bool (the ``local_files_only`` flag) and
+        returns the loaded object.  When ``offline`` is True (the model
+        looks cached) we try the offline path first so huggingface_hub
+        skips its network revision check; if that load fails the cached
+        snapshot may be partial, so we retry once *with* the network before
+        propagating.  When ``offline`` is False (genuine first run) we go
+        straight online and let any error surface.
+        """
+        try:
+            return loader(offline)
+        except Exception:
+            if not offline:
+                raise
+            print(
+                f"engram: offline {what} load failed (cache may be "
+                f"incomplete); retrying with network ...",
+                file=sys.stderr,
+                flush=True,
+            )
+            return loader(False)
 
     def embed(self, text: str, *, kind: str = "passage") -> np.ndarray:
         return self.embed_batch([text], kind=kind)[0]
@@ -843,6 +898,117 @@ class HashEmbedder:
         return np.stack([self.embed(t, kind=kind) for t in texts])
 
 
+# ── 5. Daemon client (warm e5 over loopback) ──────────────────────────────────
+
+class DaemonColdError(RuntimeError):
+    """Raised by :class:`DaemonEmbedder` when the warm daemon isn't ready.
+
+    The daemon keeps e5 warm between hook turns, but the **first** turn (or
+    the turn after the daemon idle-exited / the machine rebooted) finds it
+    absent. In that case the client spawns it in the background and raises
+    this so the **caller decides** what "cold" means:
+
+    * a hook (``engram context``) catches it and degrades to
+      directives-only for this turn — the daemon warms in the background and
+      is ready next turn;
+    * an interactive caller could instead fall back to an inline
+      :class:`LocalE5Embedder`, or wait and retry.
+
+    This split keeps the policy out of the embedder layer (see
+    ``DAEMON_DESIGN.md`` §5.1)."""
+
+
+class DaemonEmbedder:
+    """Thin client for the warm embedding daemon (``engram serve``).
+
+    Implements the :class:`Embedder` protocol by shipping text to a
+    long-lived local daemon over loopback TCP and getting vectors back —
+    **without importing torch in this process**. That is the whole point:
+    the per-turn hook stays sub-second; the ~12 s e5 cold start is paid once
+    by the daemon, not every turn.
+
+    ``dim`` must be known at construction (``MemoryManager`` checks it
+    against the store before any embed), so it is resolved up front from the
+    underlying spec / a running daemon / an explicit ``?dim=`` — never by
+    loading the model here.
+
+    Cold behaviour: if no warm daemon answers, optionally spawn one
+    (``autostart``) and raise :class:`DaemonColdError`. The protocol /
+    transport live in :mod:`engram.serve`; this class only adds the
+    client-side "warm? → embed, else spawn+signal" policy.
+    """
+
+    def __init__(
+        self,
+        underlying_spec: str,
+        dim: int,
+        autostart: bool = True,
+        idle_seconds: Optional[float] = None,
+        timeout: float = 3.0,
+    ):
+        self._underlying = underlying_spec   # resolved real spec, never "daemon:"
+        self.dim = int(dim)
+        self._autostart = autostart
+        self._idle = idle_seconds
+        self._timeout = float(timeout)
+
+    def embed(self, text: str, *, kind: str = "passage") -> np.ndarray:
+        return self.embed_batch([text], kind=kind)[0]
+
+    def embed_batch(
+        self, texts: Sequence[str], *, kind: str = "passage"
+    ) -> np.ndarray:
+        from . import serve as _serve  # local import: avoid import cycle
+
+        texts = list(texts)
+        info = _serve.ServeInfo.read()
+        alive = info is not None and _serve._pid_alive(info.pid)
+
+        # A live daemon from an incompatible build (pip upgraded under it):
+        # stop it so our subsequent spawn wins, then fall through to cold.
+        if alive and info.proto != _serve.PROTO_VERSION:
+            try:
+                _serve.stop(timeout=self._timeout)
+            except Exception:
+                pass
+            alive = False
+
+        if alive:
+            try:
+                resp = _serve.send_request(
+                    info,
+                    {"op": "embed", "token": info.token,
+                     "kind": kind, "texts": texts},
+                    timeout=self._timeout,
+                )
+                if resp.get("ok"):
+                    if not texts:
+                        return np.empty((0, self.dim), dtype=np.float32)
+                    arr = np.asarray(resp.get("vecs", []), dtype=np.float32)
+                    return np.ascontiguousarray(
+                        arr.reshape(len(texts), self.dim), dtype=np.float32
+                    )
+                # ok=False (bad token / stale state) → treat as cold below.
+            except OSError:
+                pass  # connection refused/reset → daemon died mid-flight
+
+        # Cold: spawn in the background (best effort) and signal the caller.
+        if self._autostart:
+            try:
+                _serve.spawn_detached(
+                    self._underlying,
+                    idle_seconds=(self._idle
+                                  if self._idle is not None
+                                  else _serve.DEFAULT_IDLE_SECONDS),
+                )
+            except Exception:
+                pass
+        raise DaemonColdError(
+            "engram embedding daemon is not warm yet; "
+            "spawned it in the background (ready next turn)."
+        )
+
+
 # ── Disk-backed cache wrapper ─────────────────────────────────────────────────
 
 class CachedEmbedder:
@@ -1018,6 +1184,43 @@ def _factory_hash(spec: ParsedSpec) -> "Embedder":
     return HashEmbedder(dim=dim)
 
 
+def _underlying_dim(underlying_spec: str, daemon_params: Dict[str, str]) -> int:
+    """Resolve the daemon's output dim *without loading any model*.
+
+    Priority: an explicit ``?dim=`` on the ``daemon:`` spec → the known
+    static dim of the underlying scheme (``local`` reads
+    :attr:`LocalE5Embedder.dim`, a class attribute — no torch import;
+    ``hash`` honours its own ``?dim=`` / ``ENGRAM_HASH_DIM``) → 384 as a
+    last resort (e5's dim). Remote schemes aren't expected behind the
+    daemon (they're already warm) so they fall back to 384."""
+    if "dim" in daemon_params:
+        return int(daemon_params["dim"])
+    parsed = parse_spec(underlying_spec)
+    if parsed.scheme == "local":
+        return LocalE5Embedder.dim
+    if parsed.scheme == "hash":
+        return int(parsed.params.get("dim")
+                   or os.environ.get("ENGRAM_HASH_DIM", "384"))
+    return 384
+
+
+def _factory_daemon(spec: ParsedSpec) -> "Embedder":
+    # Reconstruct the daemon spec string so serve.resolve_underlying_spec
+    # can map the target (auto/e5→local, hash→hash, ...). The daemon itself
+    # is launched with the *resolved* spec — never "daemon:" (no recursion).
+    from . import serve as _serve  # local import: avoid import cycle
+
+    daemon_spec = "daemon" + (f":{spec.target}" if spec.target else "")
+    underlying = _serve.resolve_underlying_spec(daemon_spec)
+    dim = _underlying_dim(underlying, spec.params)
+    autostart = spec.params.get("autostart", "1").lower() not in ("0", "false", "no")
+    idle = float(spec.params["idle"]) if "idle" in spec.params else None
+    timeout = float(spec.params.get("timeout", 3.0))
+    return DaemonEmbedder(
+        underlying, dim, autostart=autostart, idle_seconds=idle, timeout=timeout
+    )
+
+
 register_embedder("local",  _factory_local)
 register_embedder("openai", _factory_openai)
 register_embedder("ollama", _factory_ollama)
@@ -1025,6 +1228,7 @@ register_embedder("cohere", _factory_cohere)
 register_embedder("voyage", _factory_voyage)
 register_embedder("http",   _factory_http)
 register_embedder("hash",   _factory_hash)
+register_embedder("daemon", _factory_daemon)
 
 
 # ── Public factory: env-var-aware + cached ──────────────────────────────────
@@ -1123,6 +1327,8 @@ __all__ = [
     "VoyageEmbedder",
     "HTTPEmbedder",
     "HashEmbedder",
+    "DaemonEmbedder",
+    "DaemonColdError",
     # Cache wrapper
     "CachedEmbedder",
 ]

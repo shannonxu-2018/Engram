@@ -26,6 +26,24 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 
+def _force_utf8_io() -> None:
+    """Windows consoles default to a legacy code page (cp936/cp1252) whose
+    codec can't encode the em-dashes / accented chars in our OK/FAIL lines —
+    that crashes ``print()`` mid-run.  Mirror ``cli._force_utf8_io()`` so the
+    suite is console-safe everywhere.  Best-effort / idempotent.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfig = getattr(stream, "reconfigure", None)
+        if reconfig is not None:
+            try:
+                reconfig(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
+
+
+_force_utf8_io()
+
+
 def _assert(cond: bool, msg: str) -> None:
     if cond:
         print(f"OK   {msg}")

@@ -350,6 +350,30 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     hk.set_defaults(func=_cmd_hook)
 
+    # ── serve (warm embedding daemon) ────────────────────────────────────
+    srv = sub.add_parser(
+        "serve",
+        help="Warm-embedder daemon (keeps e5 loaded between hook turns). "
+             "Normally self-managed; these flags are for manual control.",
+    )
+    srv.add_argument(
+        "--detach", action="store_true",
+        help="Start the daemon in the background and return immediately.",
+    )
+    srv.add_argument(
+        "--stop", action="store_true",
+        help="Stop a running daemon.",
+    )
+    srv.add_argument(
+        "--status", action="store_true",
+        help="Report whether a daemon is running (and for how long).",
+    )
+    srv.add_argument(
+        "--idle", type=float, default=None,
+        help="Idle self-exit window in seconds (default: 1800).",
+    )
+    srv.set_defaults(func=_cmd_serve)
+
     # ── version ─────────────────────────────────────────────────────────
     v = sub.add_parser("version", help="Print the engram version and exit.")
     v.set_defaults(func=_cmd_version)
@@ -675,6 +699,55 @@ def _cmd_hook(args: argparse.Namespace) -> int:
     if args.agent == "all":
         return _inst.hook_all(enable=enable)
     return _inst.hook(agent=args.agent, enable=enable)
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    """Manual control of the warm embedding daemon (``engram serve``).
+
+    The daemon is normally **self-managed** — the ``daemon:`` embedder
+    backend spawns it lazily and it idle-exits on its own (see
+    ``DAEMON_DESIGN.md``).  These flags exist for debugging / explicit
+    lifecycle control:
+
+    * ``--status``  : print whether one is running.
+    * ``--stop``    : stop a running one.
+    * ``--detach``  : start one in the background.
+    * (no flag)     : run one in the **foreground** (Ctrl-C to quit) — handy
+                      for watching it work while developing.
+    """
+    from . import serve as _serve
+
+    if args.status:
+        st = _serve.status()
+        if not st.get("running"):
+            extra = " (stale serve.json present)" if st.get("stale") else ""
+            print(f"daemon: not running{extra}")
+            return 0
+        print(
+            f"daemon: running — pid={st.get('pid')} port={st.get('port')} "
+            f"embedder={st.get('embedder')!r} dim={st.get('dim')} "
+            f"uptime={st.get('uptime_s')}s served={st.get('served')}"
+        )
+        return 0
+
+    if args.stop:
+        stopped = _serve.stop()
+        print("daemon: stopped" if stopped else "daemon: nothing to stop")
+        return 0
+
+    idle = args.idle if args.idle is not None else _serve.DEFAULT_IDLE_SECONDS
+    if args.detach:
+        pid = _serve.spawn_detached(idle_seconds=idle)
+        print(f"daemon: spawned in background (pid={pid}); warming up…")
+        return 0
+
+    # Foreground (debug). resolve_underlying_spec maps ENGRAM_EMBEDDER's
+    # daemon:* (or anything) to a real backend so we never recurse.
+    print("daemon: running in foreground (Ctrl-C to stop)…", file=sys.stderr)
+    try:
+        return _serve.run_foreground(idle_seconds=idle)
+    except KeyboardInterrupt:
+        return 0
 
 
 def _cmd_version(_args: argparse.Namespace) -> int:

@@ -25,6 +25,24 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
 
 
+def _force_utf8_io() -> None:
+    """Windows consoles default to a legacy code page (cp936/cp1252) whose
+    codec can't encode the em-dashes / accented chars in our OK/FAIL lines —
+    that crashes ``print()`` mid-run.  Mirror ``cli._force_utf8_io()`` so the
+    suite is console-safe everywhere.  Best-effort / idempotent.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfig = getattr(stream, "reconfigure", None)
+        if reconfig is not None:
+            try:
+                reconfig(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
+
+
+_force_utf8_io()
+
+
 # ── Tiny harness ─────────────────────────────────────────────────────────────
 
 def _assert(cond: bool, msg: str) -> None:
@@ -715,6 +733,78 @@ def test_built_in_factories_construct_without_network() -> None:
     )
 
 
+def test_local_e5_offline_first_cache_hit() -> None:
+    """LocalE5Embedder._load_offline_first: a cached model loads offline
+    (skipping huggingface_hub's ~12s Hub revision check on every cold
+    start), a genuine first run goes straight online, and a partial /
+    corrupt cache self-heals by retrying online once.  Pure logic — no
+    torch, no network, no model download.
+    """
+    from engram.embedder import LocalE5Embedder
+
+    helper = LocalE5Embedder._load_offline_first
+
+    # 1) Cache hit (offline=True), loader succeeds → one offline call, no retry.
+    calls = []
+
+    def ok(local_files_only):
+        calls.append(local_files_only)
+        return f"model(local_files_only={local_files_only})"
+
+    out = helper(ok, True, what="model")
+    _assert(out == "model(local_files_only=True)",
+            f"cache hit loads with local_files_only=True (got {out!r})")
+    _assert(calls == [True],
+            f"successful offline load is not retried (calls={calls})")
+
+    # 2) Cache hit but the offline load fails (partial snapshot) → retry
+    #    once with the network.
+    calls = []
+
+    def fail_offline(local_files_only):
+        calls.append(local_files_only)
+        if local_files_only:
+            raise OSError("cached snapshot is incomplete")
+        return "downloaded"
+
+    out = helper(fail_offline, True, what="model")
+    _assert(out == "downloaded",
+            f"partial cache falls back to a networked load (got {out!r})")
+    _assert(calls == [True, False],
+            f"retry order is offline then online (calls={calls})")
+
+    # 3) Genuine first run (offline=False) → a single online attempt; the
+    #    error must propagate without ever trying offline.
+    calls = []
+
+    def online_only(local_files_only):
+        calls.append(local_files_only)
+        raise RuntimeError("network down")
+
+    _expect_raises(
+        RuntimeError,
+        lambda: helper(online_only, False, what="model"),
+        "first-run network error propagates (no offline retry)",
+    )
+    _assert(calls == [False],
+            f"first run tries online once, never offline (calls={calls})")
+
+    # 4) Cache hit but BOTH attempts fail → the error propagates (no loop).
+    calls = []
+
+    def always_fail(local_files_only):
+        calls.append(local_files_only)
+        raise RuntimeError(f"boom(local_files_only={local_files_only})")
+
+    _expect_raises(
+        RuntimeError,
+        lambda: helper(always_fail, True, what="model"),
+        "offline+online both failing propagates the error",
+    )
+    _assert(calls == [True, False],
+            f"both attempts made before giving up (calls={calls})")
+
+
 def test_legacy_env_var_back_compat() -> None:
     """v0.3 users on ``ENGRAM_EMBEDDER=http`` + ``ENGRAM_HTTP_URL`` must
     still work after the URI-spec refactor."""
@@ -776,6 +866,9 @@ def main() -> None:
 
     print("\n--- E3: built-in factories (no-network) ---")
     test_built_in_factories_construct_without_network()
+
+    print("\n--- E3b: LocalE5 offline-first cache load ---")
+    test_local_e5_offline_first_cache_hit()
 
     print("\n--- E4: legacy env var back-compat ---")
     test_legacy_env_var_back_compat()

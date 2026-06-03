@@ -9,6 +9,10 @@ Run from repo root::
 
     ENGRAM_EMBEDDER=hash CLAUDE_HOME=./tests/_tmp_home \\
         python tests/smoke_test.py
+
+stdout is reconfigured to UTF-8 at import time (``_force_utf8_io``) so the
+non-ASCII OK/FAIL lines don't crash ``print()`` on a default Windows console
+(cp936/GBK) — no ``PYTHONIOENCODING=utf-8`` needed.
 """
 from __future__ import annotations
 
@@ -22,6 +26,24 @@ from pathlib import Path
 # After the src/ layout migration the package lives at <repo>/src/engram/.
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
+
+
+def _force_utf8_io() -> None:
+    """Windows consoles default to a legacy code page (cp936/cp1252) whose
+    codec can't encode the em-dashes / accented chars in our OK/FAIL lines —
+    that crashes ``print()`` mid-run.  Mirror ``cli._force_utf8_io()`` so the
+    suite is console-safe everywhere.  Best-effort / idempotent.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfig = getattr(stream, "reconfigure", None)
+        if reconfig is not None:
+            try:
+                reconfig(encoding="utf-8")
+            except (ValueError, OSError):
+                pass
+
+
+_force_utf8_io()
 
 
 def _setup_tmp_dirs() -> tuple[Path, Path]:

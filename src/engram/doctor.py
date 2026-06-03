@@ -343,12 +343,56 @@ def _check_tier_files() -> List[CheckResult]:
 # Each entry is a callable returning either a CheckResult or a list of
 # CheckResults.  Ordering matters: cheapest / most-fundamental first so the
 # user spots a broken install before doctor wastes time on per-agent probes.
+def _check_daemon() -> CheckResult:
+    """Warm-embedding daemon status (``engram serve``).
+
+    The daemon is optional and self-managed — it only exists when
+    「记忆长留」 is on and a hook turn has spawned it.  So "not running" is
+    **OK, not an error**: it'll be lazily spawned when needed.  We only flag
+    a problem when ``serve.json`` is present but the daemon behind it is
+    dead/unreachable (a stale file the next client will have to clean up),
+    or when its proto/dim disagree with this build.
+    """
+    from . import serve as _serve
+
+    info = _serve.ServeInfo.read()
+    if info is None:
+        return CheckResult(
+            name="daemon",
+            status=OK,
+            message="not running (self-managed; spawned on demand)",
+        )
+    st = _serve.status()
+    if not st.get("running"):
+        return CheckResult(
+            name="daemon",
+            status=WARN,
+            message=f"stale serve.json (pid {info.pid} not answering)",
+            fix_hint="engram serve --stop   # clears the stale file",
+        )
+    if info.proto != _serve.PROTO_VERSION:
+        return CheckResult(
+            name="daemon",
+            status=WARN,
+            message=(f"running an older protocol (daemon proto={info.proto}, "
+                     f"this build={_serve.PROTO_VERSION})"),
+            fix_hint="engram serve --stop   # next turn respawns the current build",
+        )
+    return CheckResult(
+        name="daemon",
+        status=OK,
+        message=(f"running — pid={info.pid} embedder={info.embedder!r} "
+                 f"dim={info.dim} uptime={st.get('uptime_s')}s"),
+    )
+
+
 _CHECKS: List[Callable[[], Any]] = [
     _check_package_version,
     _check_pistadb_lib,
     _check_embedder,
     _check_e5_model_cache,
     _check_mcp_command,
+    _check_daemon,
     _check_agents,
     _check_tier_files,
 ]
